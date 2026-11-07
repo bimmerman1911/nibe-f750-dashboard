@@ -1,0 +1,55 @@
+import { createRequire } from 'node:module';
+import assert from 'node:assert/strict';
+const { chromium } = createRequire(import.meta.url)('playwright');
+const browser = await chromium.launch({headless:true,args:['--no-sandbox'],...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
+try {
+  const page = await browser.newPage({viewport:{width:1400,height:1200}});
+  const errors=[]; page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(`${process.env.PREVIEW_URL || 'http://127.0.0.1:8080'}/demo/`);
+  const card=page.locator('nibe-f750-card');
+  await card.getByText('Demo data',{exact:true}).waitFor();
+  assert.equal(await card.locator('svg').count(),2);
+  await page.evaluate(()=>{window.calls=[];const original=window.demoHass.callService;window.demoHass.callService=async(...args)=>{window.calls.push(args);await original(...args);};});
+  const heating=card.getByRole('spinbutton');
+  await heating.fill('3');
+  page.once('dialog',d=>d.accept());
+  await card.getByRole('button',{name:'Apply',exact:true}).first().click();
+  await card.getByRole('status').filter({hasText:'Demo setting updated'}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>window.calls[0]),['number','set_value',{entity_id:'number.demo_heating',value:3}]);
+  await heating.fill('100');
+  await card.getByRole('button',{name:'Apply',exact:true}).first().click();
+  assert.match(await card.getByRole('status').textContent(),/valid value/);
+  assert.equal(await page.evaluate(()=>window.calls.length),1);
+  await heating.fill('2');
+  page.once('dialog',d=>d.dismiss());
+  await card.getByRole('button',{name:'Apply',exact:true}).first().click();
+  assert.equal(await page.evaluate(()=>window.calls.length),1);
+  await card.getByRole('combobox').selectOption('Economy');
+  page.once('dialog',d=>d.accept());
+  await card.getByRole('button',{name:'Apply',exact:true}).last().click();
+  await page.waitForFunction(()=>window.calls.length===2);
+  assert.deepEqual(await page.evaluate(()=>window.calls[1]),['select','select_option',{entity_id:'select.demo_hot_water',option:'Economy'}]);
+  await page.evaluate(()=>{window.demoHass.callService=async()=>{throw new Error('denied');};});
+  page.once('dialog',d=>d.accept());
+  await card.getByRole('button',{name:'Apply',exact:true}).last().click();
+  await card.getByRole('status').filter({hasText:'could not be sent'}).waitFor();
+  await page.getByRole('button',{name:'Toggle unavailable readings'}).click();
+  assert.match(await card.locator('.stats').textContent(),/—/);
+  assert.equal(await card.locator('.flow:not(.paused)').count(),0);
+  await page.getByRole('button',{name:'Toggle unavailable readings'}).click();
+  await page.screenshot({path:'docs/dashboard.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  assert.equal(await card.evaluate(e=>e.shadowRoot.querySelector('ha-card').scrollWidth>e.clientWidth),false);
+  await page.screenshot({path:'docs/mobile.png',fullPage:true});
+  await page.evaluate(()=>{
+    const c=document.querySelector('nibe-f750-card');
+    c.setConfig({entities:{outdoor:'sensor.missing'},controls:{heating:'switch.unsupported'}});
+    c.hass={states:{},callService:()=>{throw new Error('must not write');}};
+  });
+  assert.equal(await card.getByRole('button').count(),0);
+  assert.match(await card.textContent() || '',/^$/); // Component content is encapsulated.
+  assert.match(await card.locator('.pill').first().textContent(),/0\/1/);
+  assert.deepEqual(errors,[]);
+  console.log('PASS: diagrams, number/select services, bounds, cancellation, errors, missing data and mobile layout.');
+} finally { await browser.close(); }

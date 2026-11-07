@@ -1,0 +1,23 @@
+# Replace every entity ID with one from your own installation.
+# IDs below are placeholders, not documented F750 IDs.
+type: custom:nibe-f750-card
+title: F750 · Energy overview
+entities:
+  outdoor: sensor.your_f750_outdoor
+  room: sensor.your_f750_room
+  hot_water: sensor.your_f750_hot_water
+  supply: sensor.your_f750_supply
+  return: sensor.your_f750_return
+  exhaust_air: sensor.your_f750_extract_air
+  leaving_air: sensor.your_f750_discharge_air
+  evaporator: sensor.your_f750_evaporator
+  condenser: sensor.your_f750_condenser
+  compressor_frequency: sensor.your_f750_compressor_frequency
+  heater_power: sensor.your_f750_auxiliary_power
+  operation: sensor.your_f750_operation
+  # Optional: map separately measured/calculated entities with correct units.
+  # electrical_power: sensor.heat_pump_input_power
+  # cop: sensor.heat_pump_cop
+controls:
+  heating: number.your_f750_heating_offset
+  hot_water: select.your_f750_hot_water_mode
