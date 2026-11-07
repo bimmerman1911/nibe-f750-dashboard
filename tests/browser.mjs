@@ -49,6 +49,39 @@ try {
   });
   assert.equal(await card.getByRole('button').count(),0);
   assert.match(await card.locator('.pill').first().textContent(),/0\/1/);
+  await page.evaluate(()=>{
+    const c=document.querySelector('nibe-f750-card');
+    const registry=[
+      {entity_id:'sensor.renamed_outside',platform:'myuplink',device_id:'pump',unique_id:'cloud-device-40004'},
+      {entity_id:'sensor.disabled_room',platform:'myuplink',device_id:'pump',unique_id:'cloud-device-40033',disabled_by:'user'},
+      {entity_id:'number.renamed_offset',platform:'myuplink',device_id:'pump',unique_id:'cloud-device-47011'},
+      {entity_id:'sensor.unrelated',platform:'other',device_id:'pump',unique_id:'cloud-device-40013'},
+      {entity_id:'sensor.raw',platform:'myuplink',device_id:'pump',unique_id:'cloud-device-49994-raw'},
+    ];
+    window.autoRegistry=registry;
+    window.autoDevices=[{id:'pump',model:'F750',name:'My heat pump'}];
+    window.autoHass={states:{'sensor.renamed_outside':{state:'7',attributes:{unit_of_measurement:'°C'}},'number.renamed_offset':{state:'0',attributes:{min:-10,max:10,step:1}}},callWS:async({type})=>type.includes('entity_registry')?window.autoRegistry:window.autoDevices};
+    c.setConfig({type:'custom:nibe-f750-card'});c.hass=window.autoHass;
+  });
+  await card.getByText(/2 readings discovered|1 readings discovered/).waitFor();
+  assert.match(await card.locator('.stats').textContent(),/7/);
+  assert.equal(await card.getByRole('spinbutton').count(),1);
+  assert.deepEqual(await card.evaluate(c=>Object.keys(c.config.entities)),['outdoor']);
+  await page.evaluate(()=>{
+    window.autoDevices=[{id:'pump',model:'F750',name:'First'},{id:'pump2',model:'F750',name:'Second'}];
+    window.autoRegistry.push({entity_id:'sensor.second',platform:'myuplink',device_id:'pump2',unique_id:'second-40004'});
+    const c=document.querySelector('nibe-f750-card');c.setConfig({type:'custom:nibe-f750-card'});
+  });
+  await card.getByText('Choose your heat pump below.').waitFor();
+  assert.equal(await card.getByRole('spinbutton').count(),0);
+  await card.locator('#device').selectOption('pump');
+  await card.getByRole('spinbutton').waitFor();
+  await card.locator('#device').selectOption('pump2');
+  await page.waitForFunction(()=>document.querySelector('nibe-f750-card').config.entities.outdoor==='sensor.second');
+  assert.equal(await card.getByRole('spinbutton').count(),0);
+  await page.evaluate(()=>{window.autoHass.callWS=async()=>{throw new Error('disconnected');};});
+  await card.getByRole('button',{name:'Refresh discovery'}).click();
+  await card.getByText(/Discovery failed/).waitFor();
   assert.deepEqual(errors,[]);
-  console.log('PASS: diagrams, number/select services, bounds, cancellation, errors, missing data and mobile layout.');
+  console.log('PASS: diagrams, services, bounds, cancellation, errors, mobile layout, renamed entity discovery, disabled/unrelated filtering, device selection and discovery errors.');
 } finally { await browser.close(); }

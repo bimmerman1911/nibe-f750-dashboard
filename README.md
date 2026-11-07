@@ -9,22 +9,31 @@ A Home Assistant custom Lovelace card for a NIBE F750 connected through **Home A
 - Responsive dashboard with outdoor, indoor, hot-water and compressor readings.
 - Conceptual refrigerant and hydraulic circuit diagrams with mapped temperatures. Flow animation follows positive compressor frequency; it does not measure refrigerant or water flow.
 - Manual heating adjustment and hot-water mode through mapped `number` / `select` entities. Values and limits come from Home Assistant. Every write asks for confirmation and reports service errors.
+- Automatic discovery by myUplink parameter ID, including renamed Home Assistant entities. No manual sensor list required.
 - Missing entities show unavailable values. No guessed sensor IDs or fabricated live COP.
 - Interactive standalone demo with clearly labeled sample data.
 
 ## Connect to Home Assistant
 
 1. Set up [the built-in myUplink integration](https://www.home-assistant.io/integrations/myuplink/) under **Settings → Devices & services**. Connect your F750 to your myUplink account first. Enter OAuth credentials in Home Assistant, never in this card or the repository.
-2. Inspect the entities created for your heat pump under **Developer tools → States**. Available data and writable controls depend on the equipment, firmware, API and subscription. Some entities may need enabling. myUplink normally updates every 60 seconds; this is a cloud dashboard, not real-time telemetry.
+2. Available data and writable controls depend on the equipment, firmware, API and subscription. Some entities may need enabling. myUplink normally updates every 60 seconds; this is a cloud dashboard, not real-time telemetry.
 3. Copy `dist/nibe-f750-card.js` to `/config/www/nibe-f750-card.js`.
-4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.1.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
-5. Add a manual dashboard card using [examples/dashboard.yaml](examples/dashboard.yaml). Replace the placeholder entity IDs with your actual IDs. Remove keys for readings you don't have; leave `controls` out for a read-only dashboard. Use a full-width panel view or a wide section for the circuit layout.
+4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.2.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
+5. Add a manual dashboard card with just:
+
+```yaml
+type: custom:nibe-f750-card
+```
+
+The card discovers the built-in myUplink device, readings and supported comfort controls automatically. If several devices are present, it prefers a uniquely identified F750; otherwise choose a device in the card. Use a full-width panel view or a wide section for the circuit layout. **Refresh discovery** rechecks registries after you enable entities. Registry access must be permitted for your Home Assistant account.
 
 For HACS, add this repository as a custom **Dashboard** repository. `hacs.json` and the distributable file are included; this project is not listed in the default HACS catalog.
 
+For an existing HACS installation, update/redownload the card and refresh your browser. Remove the old `entities:` and `controls:` configuration to enable automatic discovery. [Discovery details and source references](docs/discovery.md).
+
 ### Entity mapping
 
-All `entities` keys are optional. `entities: {}` gives an unconfigured card. Units are taken from each entity's `unit_of_measurement` when present. Match the sensor's actual meaning; especially distinguish extract/discharge air, refrigerant temperatures and heating-water temperatures. The diagrams are explanatory, not an F750 service schematic and do not model valve positions or domestic-water plumbing in detail.
+Manual mapping is an optional advanced override: providing `entities:` replaces automatic discovery. See [examples/dashboard.yaml](examples/dashboard.yaml). All `entities` keys are optional. `entities: {}` gives a read-only, unconfigured card. Units are taken from each entity's `unit_of_measurement` when present. Match the sensor's actual meaning; especially distinguish extract/discharge air, refrigerant temperatures and heating-water temperatures. The diagrams are explanatory, not an F750 service schematic and do not model valve positions or domestic-water plumbing in detail.
 
 | Key | Meaning |
 | --- | --- |
@@ -32,7 +41,7 @@ All `entities` keys are optional. `entities: {}` gives an unconfigured card. Uni
 | `hot_water` | Your selected domestic hot-water temperature sensor |
 | `supply`, `return` | Heating-water flow and return temperatures |
 | `exhaust_air`, `leaving_air` | Extract air before recovery and discharge air after recovery |
-| `evaporator`, `condenser` | Appropriate refrigerant-side temperature readings, if exposed |
+| `evaporator`, `condenser` | Evaporator and condenser refrigerant outlet (BT15 liquid line), if exposed |
 | `compressor_frequency` | Compressor frequency in Hz (also drives diagram animation) |
 | `heater_power` | Auxiliary electric heater power |
 | `electrical_power`, `cop` | Optional measured input power and separately calculated/measured COP |

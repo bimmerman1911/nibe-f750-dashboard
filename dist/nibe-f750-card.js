@@ -9,6 +9,22 @@ const readings = {
   electrical_power: ['Electrical input', 'kW'], cop: ['COP', ''], electricity_price: ['Electricity price', ''],
   operation: ['Operating mode', ''],
 };
+// F750 parameter IDs; myUplink unique IDs are `${device_id}-${parameter_id}`.
+// References and compatibility notes: docs/discovery.md.
+const points = {outdoor:['40004'],room:['40033'],hot_water:['40013','40014'],supply:['40008'],return:['40012'],exhaust_air:['40025'],leaving_air:['40026'],evaporator:['40020'],condenser:['40019'],compressor_frequency:['43136'],heater_power:['43084'],operation:['49994']};
+export function discoverEntities(registry, deviceId) {
+  const rows = registry.filter(e => e.platform === 'myuplink' && e.device_id === deviceId && !e.disabled_by);
+  const find = (ids, domains) => {
+    for (const id of ids) {
+      const matches = rows.filter(e => domains.includes(e.entity_id.split('.')[0]) && String(e.unique_id).endsWith(`-${id}`));
+      if(matches.length === 1) return matches[0].entity_id;
+      if(matches.length > 1) return undefined;
+    }
+  };
+  const entities = Object.fromEntries(Object.entries(points).map(([key,ids])=>[key,find(ids,['sensor','number','select'])]).filter(([,id])=>id));
+  const controls = Object.fromEntries([['heating',find(['47011'],['number'])],['hot_water',find(['47041'],['select','number'])]].filter(([,id])=>id));
+  return {entities,controls};
+}
 const css = `
 :host{display:block;color:var(--primary-text-color,#e6edf5);font-family:var(--paper-font-body1_-_font-family,Inter,system-ui,sans-serif)}*{box-sizing:border-box}
 ha-card{display:block;background:var(--ha-card-background,#101b29);border:1px solid var(--divider-color,#293847);border-radius:24px;overflow:hidden;box-shadow:0 12px 36px #0002}
@@ -22,17 +38,54 @@ header{display:flex;align-items:center;justify-content:space-between;gap:16px;pa
 export class NibeF750Card extends HTMLElement {
   constructor() { super(); this.attachShadow({mode:'open'}); this._busy = false; }
   setConfig(config) {
-    if (!config || !config.entities || typeof config.entities !== 'object') throw new Error('Configure entities using your Home Assistant myUplink entity IDs.');
-    this.config = {title:'F750 · Energy overview', ...config};
+    if (!config) throw new Error('Card configuration is required.');
+    this._manual = config.entities !== undefined;
+    this._controlOverrides = config.controls;
+    this._selectedDevice = config.device_id;
+    this.config = {title:'F750 · Energy overview', entities:{}, ...config};
+    this._discoveryMessage = this._manual ? '' : 'Discovering your myUplink heat pump…';
+    this._discovered = false;
     this.render();
+    this.discover();
   }
   set hass(hass) {
     this._hass = hass;
+    this.discover();
     const ids = [...Object.values(this.config?.entities || {}), ...Object.values(this.config?.controls || {})];
     const changed = !this._lastStates || ids.some(id => this._lastStates[id] !== hass.states[id]);
     this._lastStates = Object.fromEntries(ids.map(id => [id, hass.states[id]]));
     if (changed) this.render();
   }
+  async discover(refresh = false) {
+    if (!this.config || this._manual || !this._hass?.callWS || this._discovering || (this._discovered && !refresh)) return;
+    this._discovering = true;
+    const config = this.config;
+    try {
+      const [registry,devices] = await Promise.all([
+        this._hass.callWS({type:'config/entity_registry/list'}),
+        this._hass.callWS({type:'config/device_registry/list'}),
+      ]);
+      if(this.config !== config) return;
+      const ids = new Set(registry.filter(e=>e.platform==='myuplink').map(e=>e.device_id));
+      const candidates = devices.filter(d=>ids.has(d.id));
+      this._devices = candidates;
+      const f750 = candidates.filter(d=>/f\s*750/i.test(`${d.model || ''} ${d.name || ''}`));
+      const selected = this._selectedDevice || config.device_id || (f750.length===1 ? f750[0].id : candidates.length===1 ? candidates[0].id : null);
+      const device = candidates.find(d=>d.id===selected);
+      this._selectedDevice = device?.id;
+      const found = device ? discoverEntities(registry,device.id) : {entities:{},controls:{}};
+      this.config = {...config,entities:found.entities,controls:{...found.controls,...this._controlOverrides}};
+      this._discoveryMessage = !device ? (candidates.length ? 'Choose your heat pump below.' : 'No myUplink devices found. Set up the built-in myUplink integration, then retry.') : `${device.name_by_user || device.name || device.model || 'myUplink'} · ${Object.keys(found.entities).length} readings discovered. Missing readings may not be exposed or enabled.`;
+      this._discovered = true;
+    } catch {
+      this._discoveryMessage = 'Discovery failed. Check your Home Assistant connection and registry access, then retry.';
+      this._discovered = true;
+    } finally {
+      this._discovering = false;
+      this.render();
+    }
+  }
+  static getStubConfig() { return {type:'custom:nibe-f750-card'}; }
   getCardSize() { return 12; }
   getGridOptions() { return {columns:24, min_columns:6, rows:12}; }
   state(key) { return this._hass?.states[this.config?.entities?.[key]]; }
@@ -47,7 +100,7 @@ export class NibeF750Card extends HTMLElement {
   metric(key) { return `<div class="metric"><span>${readings[key][0]}</span><b>${this.value(key)} ${this.available(this.state(key)) ? this.unit(key) : ''}</b></div>`; }
   control(key, title) {
     const id = this.config.controls?.[key], s = this._hass?.states[id];
-    if (!id) return `<div class="empty">${title}: map a writable myUplink entity to enable.</div>`;
+    if (!id) return `<div class="empty">${title}: ${this._manual ? 'map a writable myUplink entity to enable.' : 'no supported enabled myUplink control discovered.'}</div>`;
     const domain = id.split('.')[0];
     if (!['number','select'].includes(domain) || !this.available(s)) return `<div class="empty">${title}: entity unavailable or unsupported (use number/select).</div>`;
     const a = s.attributes;
@@ -83,7 +136,7 @@ export class NibeF750Card extends HTMLElement {
     const mapped = Object.values(this.config.entities), available = mapped.filter(id=>this.available(this._hass?.states[id])).length;
     this.shadowRoot.innerHTML = `<style>${css}</style><ha-card>
       <header><div><div class="eyebrow">NIBE / Home energy</div><h1>${esc(this.config.title)}</h1><p>Exhaust-air heat pump · powered by myUplink</p></div><span class="pill ${this.config.demo?'demo':''}">${this.config.demo?'Demo data':`${available}/${mapped.length} readings available`}</span></header>
-      <div class="body"><div class="stats">${['outdoor','room','hot_water','compressor_frequency'].map(k=>`<div class="stat"><div class="label">${readings[k][0]}</div><div class="value">${this.value(k)}<span class="unit">${this.available(this.state(k))?this.unit(k):''}</span></div><div class="sub">${k==='compressor_frequency'?'Variable-speed compressor':k==='hot_water'?'Domestic hot water':k==='outdoor'?'At your home':'Indoor comfort'}</div></div>`).join('')}</div>
+      <div class="body">${!this._manual ? `<div class="panel" style="margin-bottom:18px"><p>${esc(this._discoveryMessage)}</p>${this._devices?.length>1 ? `<label for="device">Heat pump</label><select id="device"><option value="">Choose a heat pump</option>${this._devices.map(d=>`<option value="${esc(d.id)}" ${d.id===(this._selectedDevice || this.config.device_id)?'selected':''}>${esc(d.name_by_user || d.name || d.model || d.id)}</option>`).join('')}</select>`:''}<button id="discover" style="margin-top:8px">Refresh discovery</button></div>`:''}<div class="stats">${['outdoor','room','hot_water','compressor_frequency'].map(k=>`<div class="stat"><div class="label">${readings[k][0]}</div><div class="value">${this.value(k)}<span class="unit">${this.available(this.state(k))?this.unit(k):''}</span></div><div class="sub">${k==='compressor_frequency'?'Variable-speed compressor':k==='hot_water'?'Domestic hot water':k==='outdoor'?'At your home':'Indoor comfort'}</div></div>`).join('')}</div>
       <div class="circuits"><section class="panel"><div class="heading"><h2>Refrigerant circuit</h2><span class="tag">Heat recovery</span></div><p>Recovering energy from your home’s extract air</p>
       <svg viewBox="0 0 420 265" role="img" aria-label="Conceptual refrigerant loop: evaporator, compressor, condenser, expansion valve"><path class="pipe hot" d="M120 72H310V199H210"/><path class="pipe cold" d="M210 199H105V72H120"/><path class="pipe ${flow}" d="M105 72H310V199H105Z"/>
       <rect class="node" x="57" y="103" width="96" height="64" rx="12"/><text x="105" y="129" text-anchor="middle">Evaporator</text><text class="muted" x="105" y="148" text-anchor="middle">${this.value('evaporator')} ${this.unit('evaporator')}</text>
@@ -103,6 +156,8 @@ export class NibeF750Card extends HTMLElement {
       <footer>${this.config.demo?'Illustrative readings only. No connection to a real heat pump.':'Readings follow Home Assistant’s myUplink updates (typically every 60 seconds).'} Diagrams are conceptual, not installation schematics. COP is shown only when you map a measured or calculated entity; it is never inferred here.</footer></div></ha-card>`;
     for (const [id,value] of drafts) { const el=this.shadowRoot.getElementById(id); if(el) { el.value=value; el.focus(); } }
     this.shadowRoot.querySelectorAll('[data-apply]').forEach(b=>b.addEventListener('click',()=>this.apply(b.dataset.apply)));
+    this.shadowRoot.getElementById('discover')?.addEventListener('click',()=>this.discover(true));
+    this.shadowRoot.getElementById('device')?.addEventListener('change',e=>{this._selectedDevice=e.target.value;this.discover(true);});
   }
 }
 if (!customElements.get('nibe-f750-card')) customElements.define('nibe-f750-card', NibeF750Card);
