@@ -1,6 +1,6 @@
 {
   "name": "nibe-f750-dashboard",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": { "test": "node tests/browser.mjs", "check": "node --check dist/nibe-f750-card.js", "preview": "python -m http.server 8080" }

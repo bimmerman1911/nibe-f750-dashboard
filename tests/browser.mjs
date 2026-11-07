@@ -8,7 +8,10 @@ try {
   await page.goto(`${process.env.PREVIEW_URL || 'http://127.0.0.1:8080'}/demo/`);
   const card=page.locator('nibe-f750-card');
   await card.getByText('Demo data',{exact:true}).waitFor();
-  assert.equal(await card.locator('svg').count(),2);
+  assert.equal(await card.getByRole('img',{name:'Combined F750 refrigerant and hydraulic circuits'}).count(),1);
+  // Keep the requested light palette even when the surrounding HA theme is dark.
+  await page.evaluate(()=>document.body.style.setProperty('--primary-text-color','#fff'));
+  assert.equal(await card.locator('ha-card').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(255, 255, 255)');
   await page.evaluate(()=>{window.calls=[];const original=window.demoHass.callService;window.demoHass.callService=async(...args)=>{window.calls.push(args);await original(...args);};});
   const heating=card.getByRole('spinbutton');
   await heating.fill('3');
@@ -41,6 +44,15 @@ try {
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   assert.equal(await card.evaluate(e=>e.shadowRoot.querySelector('ha-card').scrollWidth>e.clientWidth),false);
+  const scheme=card.getByRole('region',{name:'Combined circuit diagram; scroll horizontally on small screens'});
+  assert.equal(await scheme.evaluate(e=>e.scrollWidth>e.clientWidth),true);
+  await scheme.focus();
+  await page.keyboard.press('End');
+  await scheme.evaluate(e=>e.scrollLeft=e.scrollWidth);
+  assert.equal(await scheme.evaluate(e=>e.scrollLeft>0),true);
+  await scheme.evaluate(e=>e.scrollLeft=0);
+  await page.emulateMedia({reducedMotion:'reduce'});
+  assert.equal(await card.locator('.flow').evaluate(e=>getComputedStyle(e).animationName),'none');
   await page.screenshot({path:'docs/mobile.png',fullPage:true});
   await page.evaluate(()=>{
     const c=document.querySelector('nibe-f750-card');

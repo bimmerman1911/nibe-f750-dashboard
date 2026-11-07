@@ -6,8 +6,8 @@ A Home Assistant custom Lovelace card for a NIBE F750 connected through **Home A
 
 ## First release
 
-- Responsive dashboard with outdoor, indoor, hot-water and compressor readings.
-- Conceptual refrigerant and hydraulic circuit diagrams with mapped temperatures. Flow animation follows positive compressor frequency; it does not measure refrigerant or water flow.
+- Light-themed responsive dashboard with outdoor, indoor, hot-water and compressor readings.
+- One combined refrigerant and hydraulic schematic with mapped temperatures and a shared condenser heat exchanger. Refrigerant and water paths stay separate. Moving markers indicate compressor operation only; water flow and branch selection are not inferred. On small screens, swipe or keyboard-scroll the diagram to keep labels readable.
 - Manual heating adjustment and hot-water mode through mapped `number` / `select` entities. Values and limits come from Home Assistant. Every write asks for confirmation and reports service errors.
 - Automatic discovery by myUplink parameter ID, including renamed Home Assistant entities. No manual sensor list required.
 - Missing entities show unavailable values. No guessed sensor IDs or fabricated live COP.
@@ -18,7 +18,7 @@ A Home Assistant custom Lovelace card for a NIBE F750 connected through **Home A
 1. Set up [the built-in myUplink integration](https://www.home-assistant.io/integrations/myuplink/) under **Settings → Devices & services**. Connect your F750 to your myUplink account first. Enter OAuth credentials in Home Assistant, never in this card or the repository.
 2. Available data and writable controls depend on the equipment, firmware, API and subscription. Some entities may need enabling. myUplink normally updates every 60 seconds; this is a cloud dashboard, not real-time telemetry.
 3. Copy `dist/nibe-f750-card.js` to `/config/www/nibe-f750-card.js`.
-4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.2.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
+4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.3.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
 5. Add a manual dashboard card with just:
 
 ```yaml
