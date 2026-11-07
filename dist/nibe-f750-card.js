@@ -76,7 +76,8 @@ export class NibeF750Card extends HTMLElement {
   render() {
     if (!this.config) return;
     // Preserve an in-progress setting while cloud readings refresh.
-    const drafts = [...this.shadowRoot.querySelectorAll('input,select')].map(e=>[e.id,e.value]);
+    const active = this.shadowRoot.activeElement;
+    const drafts = active?.matches('input,select') ? [[active.id, active.value]] : [];
     const running = this.available(this.state('compressor_frequency')) && Number(this.state('compressor_frequency').state)>0;
     const flow = running ? 'flow' : 'flow paused';
     const mapped = Object.values(this.config.entities), available = mapped.filter(id=>this.available(this._hass?.states[id])).length;
@@ -100,7 +101,7 @@ export class NibeF750Card extends HTMLElement {
       <section class="panel controls"><div class="heading"><h2>Comfort controls</h2><span class="tag">Manual settings</span></div><p>Changes use your existing Home Assistant entities and require confirmation.</p><div class="control-grid">${this.control('heating','Heating adjustment')}${this.control('hot_water','Hot water mode')}</div><div class="notice" role="status" aria-live="polite"></div></section>
       <section class="future"><div><div class="eyebrow">On the roadmap</div><h2 style="margin-top:8px">Smarter heat. Better timing.</h2><p>Electricity prices, weather forecasts and measured efficiency will inform future compressor and auxiliary-heater optimization.</p></div><span class="pill demo">Smart control · planned</span></section>
       <footer>${this.config.demo?'Illustrative readings only. No connection to a real heat pump.':'Readings follow Home Assistant’s myUplink updates (typically every 60 seconds).'} Diagrams are conceptual, not installation schematics. COP is shown only when you map a measured or calculated entity; it is never inferred here.</footer></div></ha-card>`;
-    for (const [id,value] of drafts) { const el=this.shadowRoot.getElementById(id); if(el) el.value=value; }
+    for (const [id,value] of drafts) { const el=this.shadowRoot.getElementById(id); if(el) { el.value=value; el.focus(); } }
     this.shadowRoot.querySelectorAll('[data-apply]').forEach(b=>b.addEventListener('click',()=>this.apply(b.dataset.apply)));
   }
 }

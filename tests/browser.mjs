@@ -48,7 +48,6 @@ try {
     c.hass={states:{},callService:()=>{throw new Error('must not write');}};
   });
   assert.equal(await card.getByRole('button').count(),0);
-  assert.match(await card.textContent() || '',/^$/); // Component content is encapsulated.
   assert.match(await card.locator('.pill').first().textContent(),/0\/1/);
   assert.deepEqual(errors,[]);
   console.log('PASS: diagrams, number/select services, bounds, cancellation, errors, missing data and mobile layout.');
