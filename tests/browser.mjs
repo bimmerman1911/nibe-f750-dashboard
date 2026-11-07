@@ -44,15 +44,16 @@ try {
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   assert.equal(await card.evaluate(e=>e.shadowRoot.querySelector('ha-card').scrollWidth>e.clientWidth),false);
-  const scheme=card.getByRole('region',{name:'Combined circuit diagram; scroll horizontally on small screens'});
-  assert.equal(await scheme.evaluate(e=>e.scrollWidth>e.clientWidth),true);
-  await scheme.focus();
-  await page.keyboard.press('End');
-  await scheme.evaluate(e=>e.scrollLeft=e.scrollWidth);
-  assert.equal(await scheme.evaluate(e=>e.scrollLeft>0),true);
-  await scheme.evaluate(e=>e.scrollLeft=0);
+  const scheme=card.getByRole('region',{name:'Combined circuit diagram',exact:true});
+  for(const width of [375,390,430]) {
+    await page.setViewportSize({width,height:844});
+    assert.equal(await scheme.evaluate(e=>e.scrollWidth>e.clientWidth),false);
+    assert.equal(await card.locator('.portrait').isVisible(),true);
+    assert.equal(await card.locator('.landscape').isVisible(),false);
+  }
+  await page.setViewportSize({width:390,height:844});
   await page.emulateMedia({reducedMotion:'reduce'});
-  assert.equal(await card.locator('.flow').evaluate(e=>getComputedStyle(e).animationName),'none');
+  assert.equal(await card.locator('.portrait .flow').evaluate(e=>getComputedStyle(e).animationName),'none');
   await page.screenshot({path:'docs/mobile.png',fullPage:true});
   await page.evaluate(()=>{
     const c=document.querySelector('nibe-f750-card');
@@ -68,17 +69,28 @@ try {
       {entity_id:'sensor.disabled_room',platform:'myuplink',device_id:'pump',unique_id:'cloud-device-40033',disabled_by:'user'},
       {entity_id:'number.renamed_offset',platform:'myuplink',device_id:'pump',unique_id:'cloud-device-47011'},
       {entity_id:'sensor.unrelated',platform:'other',device_id:'pump',unique_id:'cloud-device-40013'},
+      {entity_id:'sensor.vp_current_compressor_frequency',platform:'myuplink',device_id:'pump',unique_id:'cloud-device-new-frequency'},
+      {entity_id:'sensor.vp_target_compressor_frequency',platform:'myuplink',device_id:'pump',unique_id:'cloud-device-target'},
+      {entity_id:'sensor.vp_current_max_compressor_frequency',platform:'myuplink',device_id:'pump',unique_id:'cloud-device-max'},
+      {entity_id:'sensor.other_current_compressor_frequency',platform:'myuplink',device_id:'other-pump',unique_id:'other-device-freq'},
       {entity_id:'sensor.raw',platform:'myuplink',device_id:'pump',unique_id:'cloud-device-49994-raw'},
     ];
     window.autoRegistry=registry;
     window.autoDevices=[{id:'pump',model:'F750',name:'My heat pump'}];
-    window.autoHass={states:{'sensor.renamed_outside':{state:'7',attributes:{unit_of_measurement:'°C'}},'number.renamed_offset':{state:'0',attributes:{min:-10,max:10,step:1}}},callWS:async({type})=>type.includes('entity_registry')?window.autoRegistry:window.autoDevices};
+    window.autoHass={states:{'sensor.vp_current_compressor_frequency':{state:'57',attributes:{unit_of_measurement:'Hz'}},'sensor.renamed_outside':{state:'7',attributes:{unit_of_measurement:'°C'}},'number.renamed_offset':{state:'0',attributes:{min:-10,max:10,step:1}}},callWS:async({type})=>type.includes('entity_registry')?window.autoRegistry:window.autoDevices};
     c.setConfig({type:'custom:nibe-f750-card'});c.hass=window.autoHass;
   });
   await card.getByText(/2 readings discovered|1 readings discovered/).waitFor();
   assert.match(await card.locator('.stats').textContent(),/7/);
   assert.equal(await card.getByRole('spinbutton').count(),1);
-  assert.deepEqual(await card.evaluate(c=>Object.keys(c.config.entities)),['outdoor']);
+  assert.deepEqual(await card.evaluate(c=>Object.keys(c.config.entities)),['outdoor','compressor_frequency']);
+  assert.equal(await card.evaluate(c=>c.config.entities.compressor_frequency),'sensor.vp_current_compressor_frequency');
+  assert.match(await card.locator('.stats').textContent(),/57/);
+  // Ambiguous same-device names remain unmapped, rather than picking arbitrarily.
+  await page.evaluate(()=>window.autoRegistry.push({entity_id:'sensor.duplicate',original_name:'Current compressor frequency',platform:'myuplink',device_id:'pump',unique_id:'other-unknown-frequency'}));
+  await card.getByRole('button',{name:'Refresh discovery'}).click();
+  await page.waitForFunction(()=>!document.querySelector('nibe-f750-card').config.entities.compressor_frequency);
+  await page.evaluate(()=>window.autoRegistry.pop());
   await page.evaluate(()=>{
     window.autoDevices=[{id:'pump',model:'F750',name:'First'},{id:'pump2',model:'F750',name:'Second'}];
     window.autoRegistry.push({entity_id:'sensor.second',platform:'myuplink',device_id:'pump2',unique_id:'second-40004'});
