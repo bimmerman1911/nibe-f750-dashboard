@@ -9,6 +9,28 @@ try {
   const card=page.locator('nibe-f750-card');
   await card.getByText('Demo data',{exact:true}).waitFor();
   assert.equal(await card.getByRole('img',{name:'Combined F750 refrigerant and hydraulic circuits'}).count(),1);
+  assert.equal(await card.getByText('Smart control · planned').count(),0);
+  const heatCases=await page.evaluate(async()=>{
+    const {calculateHeat}=await import('/dist/nibe-f750-card.js');
+    const state=(state,unit)=>({state:String(state),attributes:{unit_of_measurement:unit}});
+    const entities={compressor_power:'p',water_flow:'flow',condenser_water_out:'out',return:'back',air_flow:'air',exhaust_air:'extract',leaving_air:'discharge'};
+    const base={p:state(950,'W'),flow:state(10,'l/min'),out:state(35,'°C'),back:state(30,'°C'),air:state(180,'m³/h'),extract:state(21,'°C'),discharge:state(-3,'°C')};
+    const run=changes=>calculateHeat({...base,...changes},entities);
+    return {normal:run({}),equivalent:run({p:state(.95,'kW'),flow:state(.6,'m³/h'),out:state(95,'°F'),back:state(86,'°F')}),airOnly:run({flow:state('unavailable','l/min')}),unknownAirUnit:run({flow:state('unavailable','l/min'),air:state(180,'')}),negativeDelta:run({out:state(20,'°C')}),missing:calculateHeat({},entities),off:run({p:state(0,'W'),air:state('unavailable','m³/h')}),energyInsteadOfPower:run({p:state(50,'kWh')}),blank:run({p:state(' ','W')})};
+  });
+  assert.ok(Math.abs(heatCases.normal.qCondenser-3.472883333333333)<1e-8);
+  assert.ok(Math.abs(heatCases.normal.qEvaporator-2.522883333333333)<1e-8);
+  assert.equal(heatCases.normal.compressor,.95);
+  assert.deepEqual(heatCases.equivalent,heatCases.normal);
+  assert.ok(Math.abs(heatCases.airOnly.qEvaporator-1.44864)<1e-8);
+  assert.equal(heatCases.airOnly.evaporatorMethod,'sensible');
+  assert.equal(heatCases.unknownAirUnit.qEvaporator,null);
+  assert.equal(heatCases.negativeDelta.qCondenser,null);
+  assert.equal(heatCases.missing.compressor,null);
+  assert.equal(heatCases.missing.qCondenser,null);
+  assert.equal(heatCases.off.qEvaporator,null);
+  assert.equal(heatCases.energyInsteadOfPower.compressor,null);
+  assert.equal(heatCases.blank.compressor,null);
   // Keep the requested light palette even when the surrounding HA theme is dark.
   await page.evaluate(()=>document.body.style.setProperty('--primary-text-color','#fff'));
   assert.equal(await card.locator('ha-card').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(255, 255, 255)');

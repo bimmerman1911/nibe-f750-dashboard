@@ -8,10 +8,12 @@ const readings = {
   compressor_frequency: ['Compressor', 'Hz'], heater_power: ['Auxiliary heater', 'kW'],
   electrical_power: ['Electrical input', 'kW'], cop: ['COP', ''], electricity_price: ['Electricity price', ''],
   operation: ['Operating mode', ''],
+  compressor_power: ['Compressor input power', 'kW'], water_flow: ['Condenser water flow', ''],
+  condenser_water_out: ['Condenser water outlet', '°C'], air_flow: ['Extract airflow', ''],
 };
 // F750 parameter IDs; myUplink unique IDs are `${device_id}-${parameter_id}`.
 // References and compatibility notes: docs/discovery.md.
-const points = {outdoor:['40004'],room:['40033'],hot_water:['40013','40014'],supply:['40008'],return:['40012'],exhaust_air:['40025'],leaving_air:['40026'],evaporator:['40020'],condenser:['40019'],compressor_frequency:['43136'],heater_power:['43084'],operation:['49994']};
+const points = {outdoor:['40004'],room:['40033'],hot_water:['40013','40014'],supply:['40008'],return:['40012'],exhaust_air:['40025'],leaving_air:['40026'],evaporator:['40020'],condenser:['40019'],compressor_frequency:['43136'],heater_power:['43084'],operation:['49994'],compressor_power:['43141'],water_flow:['40072'],condenser_water_out:['40017'],air_flow:['40050']};
 // API names can vary from the older F-series register catalog. Match only
 // explicit measurement names/BT designations, scoped to the selected device.
 const aliases = {
@@ -27,6 +29,10 @@ const aliases = {
   compressor_frequency: [/(?:^| )(?:current|actual) compressor frequency$/, /(?:^| )compressor frequency(?: actual)?$/],
   heater_power: [/(?:^| )(?:internal )?(?:electrical addition|auxiliary heater|additional heater) power$/, /(?:^| )int el add power$/],
   operation: [/(?:^| )(?:current priority|priority|operating mode)$/],
+  compressor_power: [/(?:^| )(?:current )?compressor (?:input |electrical )?power$/, /(?:^| )compr in power$/],
+  water_flow: [/(?:^| )bf1 ep14 flow$/, /(?:^| )condenser water flow$/],
+  condenser_water_out: [/(?:^| )bt12 (?:condensor|condenser) out$/, /(?:^| )condenser (?:water outlet|outlet temperature)(?: bt12)?$/],
+  air_flow: [/(?:^| )bs1 air flow$/, /(?:^| )(?:extract|exhaust) air ?flow$/],
 };
 const normalize = text => String(text || '').toLowerCase().replace(/[\u00ad]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
 export function discoverEntities(registry, deviceId, states = {}) {
@@ -42,7 +48,7 @@ export function discoverEntities(registry, deviceId, states = {}) {
     const byId = find(ids,['sensor','number','select']);
     if(byId) return [key,byId];
     const matches = rows.filter(e=>e.entity_id.startsWith('sensor.') && !/-raw$/.test(e.unique_id) &&
-      !(key==='compressor_frequency' && [e.original_name,e.name,states[e.entity_id]?.attributes?.friendly_name,e.entity_id.slice(7)].some(name=>/\b(target|request|requested|min|max|minimum|maximum)\b/.test(normalize(name)))) &&
+      !(['compressor_frequency','compressor_power'].includes(key) && [e.original_name,e.name,states[e.entity_id]?.attributes?.friendly_name,e.entity_id.slice(7)].some(name=>/\b(target|request|requested|min|max|minimum|maximum)\b/.test(normalize(name)))) &&
       [e.original_name,e.name,states[e.entity_id]?.attributes?.friendly_name,e.entity_id.slice(7)].some(name=>
         (aliases[key] || []).some(pattern=>pattern.test(normalize(name)))));
     return [key,matches.length===1 ? matches[0].entity_id : undefined];
@@ -50,14 +56,37 @@ export function discoverEntities(registry, deviceId, states = {}) {
   const controls = Object.fromEntries([['heating',find(['47011'],['number'])],['hot_water',find(['47041'],['select','number'])]].filter(([,id])=>id));
   return {entities,controls};
 }
+// Rates in kW. Pure function so unit conversion and thermodynamic boundaries
+// can be checked independently of the card and the cloud connection.
+export function calculateHeat(states, entities) {
+  const read = (key,kind) => {
+    const s=states[entities[key]];
+    if(!s || ['unknown','unavailable',''].includes(s.state) || String(s.state).trim()==='') return null;
+    const n=Number(s.state), unit=String(s.attributes?.unit_of_measurement || '').toLowerCase().replace(/\s/g,'').replace(/³/g,'3');
+    if(!Number.isFinite(n)) return null;
+    if(kind==='power') return unit==='kw'?n:unit==='w'?n/1000:null;
+    if(kind==='temperature') return unit==='°c'?n:unit==='°f'?(n-32)*5/9:null;
+    if(kind==='flow') return ['l/min','l/m'].includes(unit)?n/60000:unit==='l/s'?n/1000:unit==='m3/h'?n/3600:unit==='m3/s'?n:null;
+    return null;
+  };
+  const p=read('compressor_power','power'), water=read('water_flow','flow'), out=read('condenser_water_out','temperature'), back=read('return','temperature');
+  const qCondenser=water!==null && water>=0 && out!==null && back!==null && out>=back ? 997*4.18*water*(out-back) : null;
+  const compressor=p!==null && p>=0?p:null;
+  const air=read('air_flow','flow'), extract=read('exhaust_air','temperature'), discharge=read('leaving_air','temperature');
+  const sensible=air!==null && air>=0 && extract!==null && discharge!==null && extract>=discharge ? 1.2*1.006*air*(extract-discharge) : null;
+  // Approximate steady-state balance. Electrical input is not shaft work;
+  // casing/motor losses and thermal storage are not resolved by these sensors.
+  const balance=qCondenser!==null && compressor!==null && qCondenser>=compressor && compressor>0 ? qCondenser-compressor : null;
+  return {compressor,qCondenser,qEvaporator:balance??sensible,evaporatorMethod:balance!==null?'balance':sensible!==null?'sensible':null};
+}
 const css = `
 :host{container-type:inline-size;display:block;color:#203344;color-scheme:light;font-family:var(--paper-font-body1_-_font-family,Inter,system-ui,sans-serif);--primary-text-color:#203344;--secondary-text-color:#596d7d;--ha-card-background:#fff;--divider-color:#dce6eb}*{box-sizing:border-box}
 ha-card{display:block;background:#fff;color:#203344;border:1px solid #dce6eb;border-radius:24px;overflow:hidden;box-shadow:0 12px 40px #243c4b08}
 header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:28px 30px;border-bottom:1px solid #e5edf0;background:linear-gradient(115deg,#f5fbf9,#fff 70%)}.eyebrow{font-size:11px;letter-spacing:.17em;text-transform:uppercase;color:#487468;font-weight:700}h1{font-size:27px;font-weight:550;letter-spacing:-.04em;margin:7px 0}h2{font-size:16px;font-weight:600;margin:0}p{color:#596d7d;font-size:13px;line-height:1.6;margin:6px 0}.pill{display:inline-block;border:1px solid #b7ded2;background:#edf8f3;color:#24715b;border-radius:25px;padding:8px 12px;font-size:12px}.demo{color:#895a14;background:#fff8e9;border-color:#ebd8ae}
 .body{padding:24px 30px}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}.stat{padding:17px;border:1px solid #e0e9ed;border-radius:16px;background:#f8fafb}.label{color:#596d7d;font-size:12px}.value{font-size:27px;letter-spacing:-.04em;margin-top:10px}.unit{font-size:13px;color:#596d7d;margin-left:5px}.sub{font-size:11px;color:#596d7d;margin-top:6px}
 .panel{border:1px solid #dce6eb;border-radius:18px;padding:20px;min-width:0}.heading{display:flex;justify-content:space-between;gap:10px;align-items:center}.tag{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#596d7d}.legend{display:flex;flex-wrap:wrap;gap:10px 22px;padding:14px 0 0;font-size:11px;color:#526777}.legend span{display:flex;gap:7px;align-items:center}.legend i{width:20px;height:3px;border-radius:4px;background:var(--line)}.scheme-scroll{overflow-x:auto;border-radius:12px;scrollbar-color:#adc8c2 #f1f6f5}.scheme-scroll:focus-visible{outline:2px solid #268b73;outline-offset:3px}.scroll-hint{display:none}.portrait{display:none}svg{display:block;width:100%;min-width:820px;height:auto;margin:12px 0}svg text{font-family:inherit;fill:#203344;font-size:12px}svg .muted{fill:#596d7d;font-size:11px}svg .section-label{fill:#637886;font-size:10px;letter-spacing:1.6px;font-weight:600}svg .node{fill:#fff;stroke:#b5c8d1;stroke-width:1.5}svg .pipe{fill:none;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}svg .ref-high{stroke:#9171ba}svg .ref-low{stroke:#3d9c9a}svg .hot{stroke:#dd8051}svg .cold{stroke:#5a96bf}svg .air{stroke:#9db4bf;stroke-width:2;stroke-dasharray:5 5;fill:none}svg .flow{stroke-dasharray:3 14;stroke:#ffffffbb;stroke-width:2;animation:flow 3s linear infinite}svg .flow.paused{animation:none;stroke:transparent}@keyframes flow{to{stroke-dashoffset:-68}}
-.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px 22px;border-top:1px solid #e5edf0;padding-top:18px}.metric{display:flex;flex-direction:column;gap:6px;font-size:12px}.metric span{color:#596d7d}.metric b{font-size:14px;font-weight:550}.controls{margin-top:18px}.control-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}label{display:block;font-size:12px;color:#596d7d;margin-bottom:8px}select,input,button{font:inherit;border:1px solid #cbdcde;border-radius:10px;background:#fff;color:#203344;padding:10px;max-width:100%}select,input{width:100%}button{cursor:pointer;background:#edf8f3;color:#216c57;white-space:nowrap}button:hover{background:#e0f1e9}button:disabled{opacity:.45;cursor:default}.row{display:flex;gap:8px}.notice{min-height:22px;font-size:12px;color:#216c57;margin-top:12px}.future{display:flex;gap:20px;align-items:center;justify-content:space-between;margin-top:18px;background:#f5f9fc;border:1px dashed #c8dce6;border-radius:16px;padding:18px}.future p{max-width:650px}.empty{padding:12px;border:1px dashed #cbdcde;border-radius:10px;font-size:12px;color:#596d7d}footer{padding-top:18px;color:#596d7d;font-size:11px;line-height:1.6}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #268b73;outline-offset:3px}
-@container(max-width:700px){header,.body{padding:20px}.control-grid{grid-template-columns:1fr}.stats,.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.future{align-items:flex-start;flex-direction:column}h1{font-size:23px}.scheme-scroll{overflow:visible}.landscape{display:none}.portrait{display:block;min-width:0}.portrait text{font-size:14px}.portrait .muted{font-size:13px}.portrait .section-label{font-size:10px}.panel{padding:16px}header,.body{padding:16px}.legend{gap:10px 14px}select,input{font-size:16px;min-height:44px}button{min-height:44px}header .pill{flex-shrink:0}.heading{flex-wrap:wrap}}@media(prefers-reduced-motion:reduce){svg .flow{animation:none}}
+.heat-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:18px;padding:16px;background:#f6faf9;border-radius:12px}.heat-summary span{display:block;font-size:11px;color:#596d7d;line-height:1.5}.heat-summary b{display:block;margin-top:8px;font-size:16px;font-weight:550}.heat-details{margin-top:16px;font-size:12px;color:#596d7d}.heat-details summary{cursor:pointer;color:#24715b}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px 22px;border-top:1px solid #e5edf0;padding-top:18px}.metric{display:flex;flex-direction:column;gap:6px;font-size:12px}.metric span{color:#596d7d}.metric b{font-size:14px;font-weight:550}.controls{margin-top:18px}.control-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}label{display:block;font-size:12px;color:#596d7d;margin-bottom:8px}select,input,button{font:inherit;border:1px solid #cbdcde;border-radius:10px;background:#fff;color:#203344;padding:10px;max-width:100%}select,input{width:100%}button{cursor:pointer;background:#edf8f3;color:#216c57;white-space:nowrap}button:hover{background:#e0f1e9}button:disabled{opacity:.45;cursor:default}.row{display:flex;gap:8px}.notice{min-height:22px;font-size:12px;color:#216c57;margin-top:12px}.empty{padding:12px;border:1px dashed #cbdcde;border-radius:10px;font-size:12px;color:#596d7d}footer{padding-top:18px;color:#596d7d;font-size:11px;line-height:1.6}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #268b73;outline-offset:3px}
+@container(max-width:700px){header,.body{padding:20px}.control-grid,.heat-summary{grid-template-columns:1fr}.stats,.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}h1{font-size:23px}.scheme-scroll{overflow:visible}.landscape{display:none}.portrait{display:block;min-width:0}.portrait text{font-size:14px}.portrait .muted{font-size:13px}.portrait .section-label{font-size:10px}.panel{padding:16px}header,.body{padding:16px}.legend{gap:10px 14px}select,input{font-size:16px;min-height:44px}button{min-height:44px}header .pill{flex-shrink:0}.heading{flex-wrap:wrap}}@media(prefers-reduced-motion:reduce){svg .flow{animation:none}}
 `;
 export class NibeF750Card extends HTMLElement {
   constructor() { super(); this.attachShadow({mode:'open'}); this._busy = false; }
@@ -122,6 +151,10 @@ export class NibeF750Card extends HTMLElement {
   }
   unit(key) { return esc(this.state(key)?.attributes?.unit_of_measurement ?? readings[key][1]); }
   metric(key) { return `<div class="metric"><span>${readings[key][0]}</span><b>${this.value(key)} ${this.available(this.state(key)) ? this.unit(key) : ''}</b></div>`; }
+  heatValue(key) {
+    const n=this._heat[key];
+    return n===null?'—':`${new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(n)} kW`;
+  }
   control(key, title) {
     const id = this.config.controls?.[key], s = this._hass?.states[id];
     if (!id) return `<div class="empty">${title}: ${this._manual ? 'map a writable myUplink entity to enable.' : 'no supported enabled myUplink control discovered.'}</div>`;
@@ -157,6 +190,7 @@ export class NibeF750Card extends HTMLElement {
     const drafts = active?.matches('input,select') ? [[active.id, active.value]] : [];
     const running = this.available(this.state('compressor_frequency')) && Number(this.state('compressor_frequency').state)>0;
     const flow = running ? 'flow' : 'flow paused';
+    this._heat=calculateHeat(this._hass?.states || {},this.config.entities);
     const mapped = Object.values(this.config.entities), available = mapped.filter(id=>this.available(this._hass?.states[id])).length;
     this.shadowRoot.innerHTML = `<style>${css}</style><ha-card>
       <header><div><div class="eyebrow">NIBE / Home energy</div><h1>${esc(this.config.title)}</h1><p>Exhaust-air heat pump · powered by myUplink</p></div><span class="pill ${this.config.demo?'demo':''}">${this.config.demo?'Demo data':`${available}/${mapped.length} readings available`}</span></header>
@@ -184,9 +218,9 @@ export class NibeF750Card extends HTMLElement {
       <text x="36" y="342">Discharge air</text><text class="muted" x="36" y="361">${this.value('leaving_air')} ${this.unit('leaving_air')}</text>
       <rect class="node" x="112" y="190" width="96" height="80" rx="12"/>
       <path d="M127 205L143 218L127 231L143 244L127 257M191 205L175 218L191 231L175 244L191 257" fill="none" stroke="#67aaa6" stroke-width="2"/>
-      <text x="225" y="229">Evaporator</text><text class="muted" x="225" y="249">BT16 · ${this.value('evaporator')} ${this.unit('evaporator')}</text>
+      <text x="225" y="229">Evaporator</text><text class="muted" x="225" y="249">BT16 · ${this.value('evaporator')} ${this.unit('evaporator')}</text><text x="225" y="272">Q ≈ ${this.heatValue('qEvaporator')}</text>
       <circle class="node" cx="310" cy="130" r="30"/><path d="M299 143L325 130L299 117Z" fill="#9171ba"/>
-      <text x="310" y="81" text-anchor="middle">Compressor</text><text class="muted" x="310" y="190" text-anchor="middle">${this.value('compressor_frequency')} ${this.unit('compressor_frequency')}</text>
+      <text x="310" y="81" text-anchor="middle">Compressor</text><text class="muted" x="310" y="190" text-anchor="middle">${this.value('compressor_frequency')} ${this.unit('compressor_frequency')}</text><text x="310" y="213" text-anchor="middle">P = ${this.heatValue('compressor')}</text>
       <path class="node" d="M298 338L322 362V338L298 362Z"/>
       <text class="muted" x="310" y="393" text-anchor="middle">Expansion valve</text>
       <!-- Condenser: two isolated channels and a thermal transfer interface. -->
@@ -195,7 +229,7 @@ export class NibeF750Card extends HTMLElement {
       <path d="M486 201L498 212L486 223L498 234L486 245L498 258" fill="none" stroke="#b5c8d1" stroke-width="2"/>
       <path d="M475 230H506L501 225M506 230L501 235" fill="none" stroke="#bd793e" stroke-width="1.5"/>
       <text x="492" y="96" text-anchor="middle">Condenser</text>
-      <text class="muted" x="560" y="300">Heat transfer</text>
+      <text class="muted" x="560" y="300">Heat transfer</text><text x="560" y="321">Q ≈ ${this.heatValue('qCondenser')}</text>
       <text class="muted" x="448" y="317" text-anchor="end">Liquid line · ${this.value('condenser')} ${this.unit('condenser')}</text>
       <!-- Auxiliary heater and distribution are illustrative, not valve telemetry. -->
       <rect class="node" x="592" y="109" width="65" height="42" rx="10"/><path d="M605 130H612L617 119L624 141L630 119L636 130H645" fill="none" stroke="#dd8051" stroke-width="2"/>
@@ -220,12 +254,12 @@ export class NibeF750Card extends HTMLElement {
       <path class="pipe ${flow}" d="M70 160V105H270V320H70V226"/>
       <rect class="node" x="40" y="160" width="60" height="66" rx="12"/>
       <path d="M50 172L61 184L50 196L61 211M89 172L78 184L89 196L78 211" fill="none" stroke="#67aaa6" stroke-width="2"/>
-      <text x="115" y="188">Evaporator</text><text class="muted" x="115" y="209">${this.value('evaporator')} ${this.unit('evaporator')}</text>
+      <text x="115" y="188">Evaporator</text><text class="muted" x="115" y="209">${this.value('evaporator')} ${this.unit('evaporator')}</text><text x="115" y="230">Q ≈ ${this.heatValue('qEvaporator')}</text>
       <text class="muted" x="22" y="64">Extract air · ${this.value('exhaust_air')} ${this.unit('exhaust_air')}</text>
       <path class="air" d="M26 71V185H39M39 208H22V239"/>
       <text class="muted" x="115" y="242">Discharge air</text><text class="muted" x="115" y="261">${this.value('leaving_air')} ${this.unit('leaving_air')}</text>
       <circle class="node" cx="170" cy="105" r="24"/><path d="M161 116L184 105L161 94Z" fill="#9171ba"/>
-      <text x="170" y="82" text-anchor="middle">Compressor</text><text class="muted" x="170" y="146" text-anchor="middle">${this.value('compressor_frequency')} ${this.unit('compressor_frequency')}</text>
+      <text x="170" y="82" text-anchor="middle">Compressor</text><text class="muted" x="170" y="146" text-anchor="middle">${this.value('compressor_frequency')} ${this.unit('compressor_frequency')}</text><text x="170" y="167" text-anchor="middle">P = ${this.heatValue('compressor')}</text>
       <path class="node" d="M59 271L81 289H59L81 271Z"/><text class="muted" x="93" y="284">Expansion valve</text>
       <!-- The condenser bridges the stacked circuits with isolated channels. -->
       <text x="220" y="355">Condenser</text>
@@ -234,7 +268,7 @@ export class NibeF750Card extends HTMLElement {
       <path d="M137 337L150 346L163 337L176 346L189 337L202 346" fill="none" stroke="#b5c8d1" stroke-width="2"/>
       <text class="muted" x="220" y="378">Heat transfer</text>
       <text class="muted" x="170" y="407" text-anchor="middle">Liquid line · ${this.value('condenser')} ${this.unit('condenser')}</text>
-      <text class="section-label" x="44" y="444">HYDRAULICS / HOME COMFORT</text>
+      <text x="170" y="427" text-anchor="middle">Q condenser ≈ ${this.heatValue('qCondenser')}</text><text class="section-label" x="44" y="450">HYDRAULICS / HOME COMFORT</text>
       <path class="pipe hot" d="M213 361H300V479H70V559M270 479V656"/>
       <path class="pipe cold" d="M70 608V755H22V361H127M270 710V755H70"/>
       <rect class="node" x="147" y="462" width="65" height="34" rx="9"/>
@@ -249,9 +283,11 @@ export class NibeF750Card extends HTMLElement {
       <text class="muted" x="170" y="779" text-anchor="middle">Return · ${this.value('return')} ${this.unit('return')}</text>
       </svg></div>
       <div class="metrics">${['exhaust_air','leaving_air','supply','return','electrical_power','cop','heater_power','operation'].map(k=>this.metric(k)).join('')}</div>
+      <div class="heat-summary"><div><span>Evaporator heat · ${this._heat.evaporatorMethod==='balance'?'estimated balance':this._heat.evaporatorMethod==='sensible'?'sensible air only':'needs measurements'}</span><b>Q ≈ ${this.heatValue('qEvaporator')}</b></div><div><span>Condenser heat · water estimate</span><b>Q ≈ ${this.heatValue('qCondenser')}</b></div><div><span>Compressor · reported input</span><b>P = ${this.heatValue('compressor')}</b></div></div>
+      <details class="heat-details"><summary>Heat & power calculation details</summary><p>Condenser Q needs measured water flow (BF1), condenser water outlet (BT12) and return (BT3). Heating supply BT2 can include auxiliary heat, so it is not used for this calculation.</p><p>Evaporator Q uses Q condenser − P compressor when compressor input is positive. This is an approximate steady-state balance that neglects losses and stored heat. Without these inputs, airflow (BS1) and extract/discharge temperatures give sensible heat only; condensation and frost heat are excluded.</p><p>Compressor P uses the reported inverter-to-compressor input power (43141), not whole-unit consumption or a frequency estimate. Missing readings or unsupported units show —. Water estimates assume pure water; cloud samples are not synchronized.</p></details>
       <p class="sub" style="margin-top:16px">Conceptual connections · branch selection and water flow are not measured. Moving markers indicate compressor operation only.</p></section>
       <section class="panel controls"><div class="heading"><h2>Comfort controls</h2><span class="tag">Manual settings</span></div><p>Changes use your existing Home Assistant entities and require confirmation.</p><div class="control-grid">${this.control('heating','Heating adjustment')}${this.control('hot_water','Hot water mode')}</div><div class="notice" role="status" aria-live="polite"></div></section>
-      <section class="future"><div><div class="eyebrow">On the roadmap</div><h2 style="margin-top:8px">Smarter heat. Better timing.</h2><p>Electricity prices, weather forecasts and measured efficiency will inform future compressor and auxiliary-heater optimization.</p></div><span class="pill demo">Smart control · planned</span></section>
+
       <footer>${this.config.demo?'Illustrative readings only. No connection to a real heat pump.':'Readings follow Home Assistant’s myUplink updates (typically every 60 seconds).'} Diagrams are conceptual, not installation schematics. COP is shown only when you map a measured or calculated entity; it is never inferred here.</footer></div></ha-card>`;
     for (const [id,value] of drafts) { const el=this.shadowRoot.getElementById(id); if(el) { el.value=value; el.focus(); } }
     this.shadowRoot.querySelectorAll('[data-apply]').forEach(b=>b.addEventListener('click',()=>this.apply(b.dataset.apply)));
