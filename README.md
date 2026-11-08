@@ -6,7 +6,7 @@ A Home Assistant custom Lovelace card for a NIBE F750 connected through **Home A
 
 ## First release
 
-- Light-themed responsive dashboard with outdoor, indoor, hot-water and compressor readings.
+- Compact light dashboard with outdoor, indoor, hot-water and compressor readings. The diagram uses values beside the components and simple `Q = … kW` / `P = … kW` annotations. Extra readings, estimate notes and discovery settings are under **Details**.
 - One combined refrigerant and hydraulic schematic with mapped temperatures and a shared condenser heat exchanger. Refrigerant and water paths stay separate. Moving markers indicate compressor operation only; water flow and branch selection are not inferred. On narrow cards and iPhone portrait screens, the schematic automatically becomes a vertical layout with heat recovery above heat distribution; no horizontal scrolling.
 - Manual heating adjustment and hot-water mode through mapped `number` / `select` entities. Values and limits come from Home Assistant. Every write asks for confirmation and reports service errors.
 - Automatic discovery by myUplink parameter ID, with a device-scoped measurement-name fallback for API variations (including `sensor.vp_current_compressor_frequency`). Renamed entities still match stable IDs or original names. No manual sensor list required.
@@ -19,14 +19,14 @@ A Home Assistant custom Lovelace card for a NIBE F750 connected through **Home A
 1. Set up [the built-in myUplink integration](https://www.home-assistant.io/integrations/myuplink/) under **Settings → Devices & services**. Connect your F750 to your myUplink account first. Enter OAuth credentials in Home Assistant, never in this card or the repository.
 2. Available data and writable controls depend on the equipment, firmware, API and subscription. Some entities may need enabling. myUplink normally updates every 60 seconds; this is a cloud dashboard, not real-time telemetry.
 3. Copy `dist/nibe-f750-card.js` to `/config/www/nibe-f750-card.js`.
-4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.8.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
+4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.9.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
 5. Add a manual dashboard card with just:
 
 ```yaml
 type: custom:nibe-f750-card
 ```
 
-The card discovers the built-in myUplink device, readings and supported comfort controls automatically. If several devices are present, it prefers a uniquely identified F750; otherwise choose a device in the card. Use a full-width panel view or a wide section for the circuit layout. **Refresh discovery** rechecks registries after you enable entities. Registry access must be permitted for your Home Assistant account.
+The card discovers the built-in myUplink device, readings and supported comfort controls automatically. If several devices are present, it prefers a uniquely identified F750; otherwise choose a device in the card. Use a full-width panel view or a wide section for the circuit layout. **Details → Refresh discovery** rechecks registries after you enable entities. Registry access must be permitted for your Home Assistant account.
 
 For HACS, add this repository as a custom **Dashboard** repository. `hacs.json` and the distributable file are included; this project is not listed in the default HACS catalog.
 

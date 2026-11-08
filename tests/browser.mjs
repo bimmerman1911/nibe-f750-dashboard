@@ -94,7 +94,7 @@ try {
     c.hass={states:{},callService:()=>{throw new Error('must not write');}};
   });
   assert.equal(await card.getByRole('button').count(),0);
-  assert.match(await card.locator('.pill').first().textContent(),/0\/1/);
+  assert.match(await card.locator('.pill').first().getAttribute('title'),/0\/1/);
   await page.evaluate(()=>{
     const c=document.querySelector('nibe-f750-card');
     const registry=[
@@ -113,7 +113,8 @@ try {
     window.autoHass={states:{'sensor.vp_current_compressor_frequency':{state:'57',attributes:{unit_of_measurement:'Hz'}},'sensor.renamed_outside':{state:'7',attributes:{unit_of_measurement:'°C'}},'number.renamed_offset':{state:'0',attributes:{min:-10,max:10,step:1}}},callWS:async({type})=>type.includes('entity_registry')?window.autoRegistry:window.autoDevices};
     c.setConfig({type:'custom:nibe-f750-card'});c.hass=window.autoHass;
   });
-  await card.getByText(/2 readings discovered|1 readings discovered/).waitFor();
+  await page.waitForFunction(()=>document.querySelector('nibe-f750-card')._discovered);
+  await card.locator('#details > summary').click();
   assert.match(await card.locator('.stats').textContent(),/7/);
   assert.equal(await card.getByRole('spinbutton').count(),1);
   assert.deepEqual(await card.evaluate(c=>Object.keys(c.config.entities)),['outdoor','compressor_frequency']);
@@ -145,11 +146,10 @@ try {
     c.setConfig({entities:{compressor_frequency:'f',condenser_water_out:'bt12',reference_air_flow:'ref',exhaust_air:'extract',leaving_air:'discharge'}});
     c.hass={states:{f:state(50,'Hz'),bt12:state(45,'°C'),ref:state(180,'M3/h'),extract:state(21,'°C'),discharge:state(-3,'°C')},callWS:async()=>{throw new Error('No history calls are needed');}};
   });
-  await card.getByText('Compressor · frequency / BT12 estimate').waitFor();
-  assert.match(await card.locator('.heat-summary').textContent(),/P est ≈ 0.8 kW/);
-  assert.match(await card.locator('.heat-summary').textContent(),/Q ≈ 2.25 kW/);
+  assert.match(await card.locator('.portrait').textContent(),/P = 0.8 kW/);
+  assert.match(await card.locator('.portrait').textContent(),/Q = 2.25 kW/);
   await card.evaluate(c=>{c.hass={...c._hass,states:{...c._hass.states,f:{state:'100',attributes:{unit_of_measurement:'Hz'}}}};});
-  assert.match(await card.locator('.heat-summary').textContent(),/P est ≈ 1.61 kW/);
+  assert.match(await card.locator('.portrait').textContent(),/P = 1.61 kW/);
   assert.deepEqual(errors,[]);
   console.log('PASS: diagrams, services, bounds, cancellation, errors, mobile layout, renamed entity discovery, disabled/unrelated filtering, device selection and discovery errors.');
 } finally { await browser.close(); }

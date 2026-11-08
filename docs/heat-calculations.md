@@ -16,7 +16,7 @@ The owner supplied this empirical formula:
 
 The implementation uses these coefficients exactly. Inputs are actual compressor frequency (43136 or its measurement-name alias) and condenser water outlet BT12 (40017 or its alias). BT12 is not the BT15 liquid-line temperature or BT2 heating supply temperature. °F inputs are converted to °C; frequency must be Hz.
 
-This replaces the previous reported-power/history-based path. There is no fallback to a reported power sensor, assumed COP or averaged energy derivative. Missing inputs, negative frequency or a negative calculated coefficient leave P blank rather than manufacturing a plausible value. Zero frequency with valid BT12 produces zero power. The formula's accuracy and operating range have not been independently validated for this installation; it is labeled **P est**.
+This replaces the previous reported-power/history-based path. There is no fallback to a reported power sensor, assumed COP or averaged energy derivative. Missing inputs, negative frequency or a negative calculated coefficient leave P blank rather than manufacturing a plausible value. Zero frequency with valid BT12 produces zero power. The formula's accuracy and operating range have not been independently validated for this installation; it is shown as **P = … kW** with an estimate tooltip; the **Details** section explains its basis.
 
 ## Evaporator Q: reference-airflow sensible heat
 
@@ -28,7 +28,7 @@ For m³/h, equivalently: `Q ≈ 0.000335333 × airflow × temperature_drop`.
 
 Reference airflow takes precedence; measured BS1 airflow (40050) is used if reference airflow is unusable. No water-side calculation is used to infer evaporator Q, so the chain is not circular. Unsupported units, missing temperatures, negative airflow or a reversed temperature difference leave Q blank.
 
-The diagram says **Q sens** and identifies whether reference or measured airflow is used. Reference flow can differ from actual flow as frost builds up, filters become dirty or ventilation settings change. Constant air density and heat capacity are approximations. The estimate excludes condensation/freezing heat and humidity effects; it is not total refrigerant evaporator capacity.
+The diagram says **Q = … kW**, with an estimate tooltip. **Details** retains the explanation that this is sensible heat only. Reference flow can differ from actual flow as frost builds up, filters become dirty or ventilation settings change. Constant air density and heat capacity are approximations. The estimate excludes condensation/freezing heat and humidity effects; it is not total refrigerant evaporator capacity.
 
 ## Condenser Q: derived heat balance
 

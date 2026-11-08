@@ -4,7 +4,7 @@ Home Assistant's built-in myUplink integration derives display names from API pa
 
 Instead the card reads the Home Assistant entity and device registries over the authenticated Home Assistant WebSocket connection. It filters for `platform: myuplink`, selects one device and matches parameter IDs against the integration's unique ID format: `<myUplink device ID>-<parameter ID>`. Renaming an entity does not change this identity. No myUplink API requests or credentials are added.
 
-The card excludes disabled entities and other integrations, scopes every match to one device, and leaves ambiguous matches unmapped. With multiple devices, it selects a unique F750 model if possible, otherwise asks the user to choose. A device selection stays for that card instance; optional `device_id:` in YAML pins a Home Assistant device registry ID across reloads. Multiple cards can target different devices. Use **Refresh discovery** after enabling missing entities.
+The card excludes disabled entities and other integrations, scopes every match to one device, and leaves ambiguous matches unmapped. With multiple devices, it selects a unique F750 model if possible, otherwise asks the user to choose. A device selection stays for that card instance; optional `device_id:` in YAML pins a Home Assistant device registry ID across reloads. Multiple cards can target different devices. Use **Details → Refresh discovery** after enabling missing entities.
 
 | Card reading / control | F750 parameter | Meaning |
 | --- | --- | --- |
