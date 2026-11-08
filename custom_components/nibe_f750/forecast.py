@@ -6,6 +6,7 @@ from .engine import ROOM1, ROOM2, number, fresh, PRICE
 from .predictive import prices, timeline, plan, DEFAULTS
 from .offset import plan_offsets
 from .dhw import next_deadline
+from .work import PlanningBudget
 from zoneinfo import ZoneInfo
 
 
@@ -113,16 +114,23 @@ class Predictor:
             if bt12 and fresh(bt12,now) and number(bt12.state) is not None:
                 model['dhw_supply_c' if model['initial_mode']=='dhw' else 'supply_c']=float(bt12.state)
             # Pure model evaluation stays off HA's event loop.
+            budget=PlanningBudget()
+            response=dict(self.offset_response)
             def evaluate():
-                result=plan(slots,room,tank,max_hz,model,min_hz=min_hz)
+                result=plan(slots,room,tank,max_hz,model,min_hz=min_hz,budget=budget)
                 result.update(initial_room=room,initial_water=tank)
                 if result.get('steps'):
-                    offset_plan=plan_offsets(result,states,now,self.offset_response,min_hz,max_hz)
+                    offset_plan=plan_offsets(result,states,now,response,min_hz,max_hz,budget=budget)
                     if offset_plan is None:
                         return {**result,'steps':[],'message':'Offset planning needs fresh degree minutes, supply and control readings.'}
                     return offset_plan
                 return result
-            result=await self.hass.async_add_executor_job(evaluate)
+            try:
+                result=await self.hass.async_add_executor_job(evaluate)
+            finally:
+                # Cancelling an asyncio executor future cannot stop its thread.
+                # The worker observes this flag at each search expansion.
+                budget.cancelled.set()
             self.result={**result,'generated_at':now,'weather_entity':weather_id,
                          'tomorrow_unavailable':unpublished,'currency':'SEK',
                          'initial_room':room,'initial_water':tank,'learning':self.learning,

@@ -121,7 +121,7 @@ def offset_levels(control):
     return [round(lower+i*step,10) for i in range(count)]
 
 
-def plan_offsets(result,states,now,response,min_hz,max_hz):
+def plan_offsets(result,states,now,response,min_hz,max_hz,budget=None):
     """Beam-search offset sequences against a simulated native heat response.
 
     The thermal scheduler supplies prices/weather and hot-water reservation.
@@ -148,9 +148,13 @@ def plan_offsets(result,states,now,response,min_hz,max_hz):
              'morning_pending':m.get('dhw_morning_pending',False),'charging':sample['mode']=='Hot water' and sample['compressor_on'],'running':sample['heat']>0,'offset':sample['offset'],'cost':0.,'penalty':0.,'path':[]}
     beam=[initial]
     for slot in slots:
+        if budget is not None:
+            budget.check()
         dt=(slot['end']-slot['start'])/3600
         candidates=[]
         for prev in beam:
+            if budget is not None:
+                budget.check()
             for offset in levels:
                 change=offset-prev['offset']
                 required=sample['required']+gain*(offset-sample['offset'])-1.2*(slot['outdoor']-sample['outside'])
@@ -162,8 +166,9 @@ def plan_offsets(result,states,now,response,min_hz,max_hz):
                 charging=prev['charging']
                 normal=decision['dhw']=='Normal'
                 running=prev['running']
-                # Minute substeps integrate backlog instead of assuming immediate heat.
-                n=max(1,math.ceil(dt*60));h=dt/n
+                # Five-minute substeps retain backlog and delayed response without
+                # the former one-minute workload on small HA hosts.
+                n=max(1,math.ceil(dt*12));h=dt/n
                 for _ in range(n):
                     draw=m.get('dhw_profile',[m['dhw_draw_kw']]*24)[slot.get('local_hour',0)]
                     water_heat,water_fraction,water_inline,charging=charge(w,normal,charging,h,m,slot['inline_kw'],draw)
@@ -185,7 +190,7 @@ def plan_offsets(result,states,now,response,min_hz,max_hz):
                     if not dhw:
                         dm=bounded(dm+(supply-required)*h*60,-3000,1000)
                     equilibrium=r+q/conductance
-                    supply=bounded(supply+bounded((equilibrium-supply)*(1-math.exp(-h/.5)),-2,2),15,80)
+                    supply=bounded(supply+bounded((equilibrium-supply)*(1-math.exp(-h/.5)),-120*h,120*h),15,80)
                     stored,delivered=filtered_heat(stored,q,h,m.get('heating_lag_hours',1))
                     draw=m.get('dhw_profile',[m['dhw_draw_kw']]*24)[slot.get('local_hour',0)]
                     r,w=thermal_step(r,w,slot['outdoor'],h,delivered,water_heat,m,draw)
@@ -209,7 +214,7 @@ def plan_offsets(result,states,now,response,min_hz,max_hz):
         for p in sorted(candidates,key=rank):
             key=(round(p['offset'],2),round(p['room']*20),round(p['dm']/50),round(p['heat']*2),p['charging'])
             unique.setdefault(key,p)
-        beam=list(unique.values())[:24]
+        beam=list(unique.values())[:12]
     best=min(beam,key=lambda p:p['cost']+p['penalty']+200*max(0,target-p['room'])**2)
     return {**result,'steps':best['path'],'model_cost':best['cost'],
             'inline_kwh':sum(s['inline_kw']*(s['end']-s['start'])/3600 for s in best['path']),

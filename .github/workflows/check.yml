@@ -20,6 +20,7 @@ jobs:
       - run: python tests/offset_test.py
       - run: python tests/dhw_test.py
       - run: python tests/recovery_test.py
+      - run: python tests/work_test.py
       - run: python -m compileall -q custom_components/nibe_f750
       - run: npm run check
       - run: npm install --no-save playwright@1.56.1

@@ -95,7 +95,7 @@ class Node:
     violation: float = 0.
 
 
-def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
+def plan(slots, room, tank, max_hz=84., model=None, beam=64, min_hz=20., budget=None):
     from .adaptive import filtered_heat
     m={**DEFAULTS, **(model or {})}
     for key in DEFAULTS:
@@ -127,9 +127,13 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
         initial_mode=m.get('initial_mode','off')
         states=[Node(room,tank,m.get('initial_heat_kw',0.),initial_mode,m.get('initial_run_minutes',30.),m.get('initial_off_minutes',15.),m.get('initial_mode_minutes',15.),0.,0.)]
         for i,s in enumerate(slots):
+            if budget is not None:
+                budget.check()
             unique={}
             progress=(i+1)/len(slots)
             for prev in states:
+                if budget is not None:
+                    budget.check()
                 for mode,qh,qw,hz,inline in actions:
                     draw=profile[s.get('local_hour',0)] if profile is not None else m['dhw_draw_kw']
                     if mode=='dhw':
@@ -184,7 +188,7 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
         return min(feasible,key=lambda n:(n.violation+4000*max(0,m['room_target_c']-n.room)**2+400*max(0,m['tank_target_c']-n.water)**2,n.miss,n.aux,n.cost) if recovery else (n.miss,n.aux,n.cost)) if feasible else None
     best=solve(False,beam)
     if best is None:
-        best=solve(False,beam*3)
+        best=solve(False,beam*2)
     compressor_only=best is not None
     if best is None or best.miss>.1:
         supported=solve(True,beam)
