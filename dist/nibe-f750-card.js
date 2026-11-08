@@ -10,10 +10,11 @@ const readings = {
   operation: ['Operating mode', ''],
   compressor_power: ['Compressor input power', 'kW'], water_flow: ['Condenser water flow', ''],
   condenser_water_out: ['Condenser water outlet', '°C'], air_flow: ['Extract airflow', ''],
+  compressor_energy: ['Compressor energy', 'kWh'],
 };
 // F750 parameter IDs; myUplink unique IDs are `${device_id}-${parameter_id}`.
 // References and compatibility notes: docs/discovery.md.
-const points = {outdoor:['40004'],room:['40033'],hot_water:['40013','40014'],supply:['40008'],return:['40012'],exhaust_air:['40025'],leaving_air:['40026'],evaporator:['40020'],condenser:['40019'],compressor_frequency:['43136'],heater_power:['43084'],operation:['49994'],compressor_power:['43141'],water_flow:['40072'],condenser_water_out:['40017'],air_flow:['40050']};
+const points = {outdoor:['40004'],room:['40033'],hot_water:['40013','40014'],supply:['40008'],return:['40012'],exhaust_air:['40025'],leaving_air:['40026'],evaporator:['40020'],condenser:['40019'],compressor_frequency:['43136'],heater_power:['43084'],operation:['49994'],compressor_power:['43141'],water_flow:['40072'],condenser_water_out:['40017'],air_flow:['40050'],compressor_energy:['43144']};
 // API names can vary from the older F-series register catalog. Match only
 // explicit measurement names/BT designations, scoped to the selected device.
 const aliases = {
@@ -33,6 +34,7 @@ const aliases = {
   water_flow: [/(?:^| )bf1 ep14 flow$/, /(?:^| )condenser water flow$/],
   condenser_water_out: [/(?:^| )bt12 (?:condensor|condenser) out$/, /(?:^| )condenser (?:water outlet|outlet temperature)(?: bt12)?$/],
   air_flow: [/(?:^| )bs1 air flow$/, /(?:^| )(?:extract|exhaust) air ?flow$/],
+  compressor_energy: [/(?:^| )(?:total )?compressor (?:energy|energy total|time factor)$/, /(?:^| )compr energy total$/],
 };
 const normalize = text => String(text || '').toLowerCase().replace(/[\u00ad]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
 export function discoverEntities(registry, deviceId, states = {}) {
@@ -56,9 +58,26 @@ export function discoverEntities(registry, deviceId, states = {}) {
   const controls = Object.fromEntries([['heating',find(['47011'],['number'])],['hot_water',find(['47041'],['select','number'])]].filter(([,id])=>id));
   return {entities,controls};
 }
+// Average kW from an explicitly energy-valued compressor counter. Never treat
+// operating hours or a dimensionless time factor as electrical energy.
+export function powerFromEnergy(history, now = Date.now()) {
+  if(!Array.isArray(history) || history.length<2) return null;
+  const samples=history.map(s=>{
+    const u=String((s.attributes || s.a)?.unit_of_measurement || '').toLowerCase();
+    const factor=u==='kwh'?1:u==='wh'?0.001:null;
+    const value=String(s.state ?? s.s ?? '').trim();
+    const timestamp=s.last_updated || s.last_changed || s.lu || s.lc;
+    return {t:typeof timestamp==='number'?timestamp*1000:Date.parse(timestamp),e:value!=='' && factor!==null ? Number(value)*factor : NaN};
+  }).sort((a,b)=>a.t-b.t);
+  if(samples.some(s=>!Number.isFinite(s.t)||!Number.isFinite(s.e)||s.e<0||s.t>now)) return null;
+  for(let i=1;i<samples.length;i++) if(samples[i].t<=samples[i-1].t || samples[i].e<samples[i-1].e) return null;
+  const first=samples[0],last=samples.at(-1),elapsed=last.t-first.t;
+  if(elapsed<300000 || elapsed>900000 || now-last.t>180000) return null;
+  return {power:(last.e-first.e)*3600000/elapsed,minutes:elapsed/60000,asOf:last.t};
+}
 // Rates in kW. Pure function so unit conversion and thermodynamic boundaries
 // can be checked independently of the card and the cloud connection.
-export function calculateHeat(states, entities) {
+export function calculateHeat(states, entities, energyAverage = null) {
   const read = (key,kind) => {
     const s=states[entities[key]];
     if(!s || ['unknown','unavailable',''].includes(s.state) || String(s.state).trim()==='') return null;
@@ -71,13 +90,15 @@ export function calculateHeat(states, entities) {
   };
   const p=read('compressor_power','power'), water=read('water_flow','flow'), out=read('condenser_water_out','temperature'), back=read('return','temperature');
   const qCondenser=water!==null && water>=0 && out!==null && back!==null && out>=back ? 997*4.18*water*(out-back) : null;
-  const compressor=p!==null && p>=0?p:null;
+  const reported=p!==null && p>=0?p:null;
+  const average=energyAverage && Number.isFinite(energyAverage.power) && energyAverage.power>=0 ? energyAverage : null;
+  const compressor=reported??average?.power??null;
   const air=read('air_flow','flow'), extract=read('exhaust_air','temperature'), discharge=read('leaving_air','temperature');
   const sensible=air!==null && air>=0 && extract!==null && discharge!==null && extract>=discharge ? 1.2*1.006*air*(extract-discharge) : null;
   // Approximate steady-state balance. Electrical input is not shaft work;
   // casing/motor losses and thermal storage are not resolved by these sensors.
-  const balance=qCondenser!==null && compressor!==null && qCondenser>=compressor && compressor>0 ? qCondenser-compressor : null;
-  return {compressor,qCondenser,qEvaporator:balance??sensible,evaporatorMethod:balance!==null?'balance':sensible!==null?'sensible':null};
+  const balance=qCondenser!==null && reported!==null && qCondenser>=reported && reported>0 ? qCondenser-reported : null;
+  return {compressor,compressorMethod:reported!==null?'reported':average?'energy-average':null,averageMinutes:reported===null?average?.minutes:null,qCondenser,qEvaporator:balance??sensible,evaporatorMethod:balance!==null?'balance':sensible!==null?'sensible':null};
 }
 const css = `
 :host{container-type:inline-size;display:block;color:#203344;color-scheme:light;font-family:var(--paper-font-body1_-_font-family,Inter,system-ui,sans-serif);--primary-text-color:#203344;--secondary-text-color:#596d7d;--ha-card-background:#fff;--divider-color:#dce6eb}*{box-sizing:border-box}
@@ -90,20 +111,25 @@ header{display:flex;align-items:center;justify-content:space-between;gap:16px;pa
 `;
 export class NibeF750Card extends HTMLElement {
   constructor() { super(); this.attachShadow({mode:'open'}); this._busy = false; }
+  connectedCallback() { this._historyTimer=setInterval(()=>this.refreshEnergy(),60000); }
+  disconnectedCallback() { clearInterval(this._historyTimer); }
   setConfig(config) {
     if (!config) throw new Error('Card configuration is required.');
     this._manual = config.entities !== undefined;
     this._controlOverrides = config.controls;
     this._selectedDevice = config.device_id;
+    this._energyAverage=null; this._energyRequestAt=0;
     this.config = {title:'F750 · Energy overview', entities:{}, ...config};
     this._discoveryMessage = this._manual ? '' : 'Discovering your myUplink heat pump…';
     this._discovered = false;
     this.render();
     this.discover();
+    this.refreshEnergy();
   }
   set hass(hass) {
     this._hass = hass;
     this.discover();
+    this.refreshEnergy();
     const ids = [...Object.values(this.config?.entities || {}), ...Object.values(this.config?.controls || {})];
     const changed = !this._lastStates || ids.some(id => this._lastStates[id] !== hass.states[id]);
     this._lastStates = Object.fromEntries(ids.map(id => [id, hass.states[id]]));
@@ -128,6 +154,7 @@ export class NibeF750Card extends HTMLElement {
       this._selectedDevice = device?.id;
       const found = device ? discoverEntities(registry,device.id,this._hass.states) : {entities:{},controls:{}};
       this.config = {...config,entities:found.entities,controls:{...found.controls,...this._controlOverrides}};
+      this.refreshEnergy();
       this._discoveryMessage = !device ? (candidates.length ? 'Choose your heat pump below.' : 'No myUplink devices found. Set up the built-in myUplink integration, then retry.') : `${device.name_by_user || device.name || device.model || 'myUplink'} · ${Object.keys(found.entities).length} readings discovered. Missing readings may not be exposed or enabled.`;
       this._discovered = true;
     } catch {
@@ -137,6 +164,18 @@ export class NibeF750Card extends HTMLElement {
       this._discovering = false;
       this.render();
     }
+  }
+  async refreshEnergy() {
+    const id=this.config?.entities?.compressor_energy;
+    if(this._energyEntity!==id) { this._energyEntity=id; this._energyAverage=null; this._energyRequestAt=0; }
+    if(!id || !this._hass?.callWS || this._energyPending || Date.now()-this._energyRequestAt<60000) return;
+    this._energyPending=true; this._energyRequestAt=Date.now();
+    const config=this.config,now=Date.now();
+    try {
+      const history=await this._hass.callWS({type:'history/history_during_period',start_time:new Date(now-600000).toISOString(),end_time:new Date(now).toISOString(),entity_ids:[id],include_start_time_state:true,significant_changes_only:false,minimal_response:false,no_attributes:false});
+      if(this.config===config && this.config.entities.compressor_energy===id) this._energyAverage=powerFromEnergy(history[id],now);
+    } catch { if(this.config===config) this._energyAverage=null; }
+    finally { this._energyPending=false; this.render(); }
   }
   static getStubConfig() { return {type:'custom:nibe-f750-card'}; }
   getCardSize() { return 12; }
@@ -190,7 +229,8 @@ export class NibeF750Card extends HTMLElement {
     const drafts = active?.matches('input,select') ? [[active.id, active.value]] : [];
     const running = this.available(this.state('compressor_frequency')) && Number(this.state('compressor_frequency').state)>0;
     const flow = running ? 'flow' : 'flow paused';
-    this._heat=calculateHeat(this._hass?.states || {},this.config.entities);
+    const average=this._energyAverage && Date.now()-this._energyAverage.asOf<=180000 ? this._energyAverage : null;
+    this._heat=calculateHeat(this._hass?.states || {},this.config.entities,average);
     const mapped = Object.values(this.config.entities), available = mapped.filter(id=>this.available(this._hass?.states[id])).length;
     this.shadowRoot.innerHTML = `<style>${css}</style><ha-card>
       <header><div><div class="eyebrow">NIBE / Home energy</div><h1>${esc(this.config.title)}</h1><p>Exhaust-air heat pump · powered by myUplink</p></div><span class="pill ${this.config.demo?'demo':''}">${this.config.demo?'Demo data':`${available}/${mapped.length} readings available`}</span></header>
@@ -220,7 +260,7 @@ export class NibeF750Card extends HTMLElement {
       <path d="M127 205L143 218L127 231L143 244L127 257M191 205L175 218L191 231L175 244L191 257" fill="none" stroke="#67aaa6" stroke-width="2"/>
       <text x="225" y="229">Evaporator</text><text class="muted" x="225" y="249">BT16 · ${this.value('evaporator')} ${this.unit('evaporator')}</text><text x="225" y="272">Q ≈ ${this.heatValue('qEvaporator')}</text>
       <circle class="node" cx="310" cy="130" r="30"/><path d="M299 143L325 130L299 117Z" fill="#9171ba"/>
-      <text x="310" y="81" text-anchor="middle">Compressor</text><text class="muted" x="310" y="190" text-anchor="middle">${this.value('compressor_frequency')} ${this.unit('compressor_frequency')}</text><text x="310" y="213" text-anchor="middle">P = ${this.heatValue('compressor')}</text>
+      <text x="310" y="81" text-anchor="middle">Compressor</text><text class="muted" x="310" y="190" text-anchor="middle">${this.value('compressor_frequency')} ${this.unit('compressor_frequency')}</text><text x="310" y="213" text-anchor="middle">${this._heat.compressorMethod==='energy-average'?'P avg ≈':'P ='} ${this.heatValue('compressor')}</text>
       <path class="node" d="M298 338L322 362V338L298 362Z"/>
       <text class="muted" x="310" y="393" text-anchor="middle">Expansion valve</text>
       <!-- Condenser: two isolated channels and a thermal transfer interface. -->
@@ -259,7 +299,7 @@ export class NibeF750Card extends HTMLElement {
       <path class="air" d="M26 71V185H39M39 208H22V239"/>
       <text class="muted" x="115" y="242">Discharge air</text><text class="muted" x="115" y="261">${this.value('leaving_air')} ${this.unit('leaving_air')}</text>
       <circle class="node" cx="170" cy="105" r="24"/><path d="M161 116L184 105L161 94Z" fill="#9171ba"/>
-      <text x="170" y="82" text-anchor="middle">Compressor</text><text class="muted" x="170" y="146" text-anchor="middle">${this.value('compressor_frequency')} ${this.unit('compressor_frequency')}</text><text x="170" y="167" text-anchor="middle">P = ${this.heatValue('compressor')}</text>
+      <text x="170" y="82" text-anchor="middle">Compressor</text><text class="muted" x="170" y="146" text-anchor="middle">${this.value('compressor_frequency')} ${this.unit('compressor_frequency')}</text><text x="170" y="167" text-anchor="middle">${this._heat.compressorMethod==='energy-average'?'P avg ≈':'P ='} ${this.heatValue('compressor')}</text>
       <path class="node" d="M59 271L81 289H59L81 271Z"/><text class="muted" x="93" y="284">Expansion valve</text>
       <!-- The condenser bridges the stacked circuits with isolated channels. -->
       <text x="220" y="355">Condenser</text>
@@ -283,8 +323,8 @@ export class NibeF750Card extends HTMLElement {
       <text class="muted" x="170" y="779" text-anchor="middle">Return · ${this.value('return')} ${this.unit('return')}</text>
       </svg></div>
       <div class="metrics">${['exhaust_air','leaving_air','supply','return','electrical_power','cop','heater_power','operation'].map(k=>this.metric(k)).join('')}</div>
-      <div class="heat-summary"><div><span>Evaporator heat · ${this._heat.evaporatorMethod==='balance'?'estimated balance':this._heat.evaporatorMethod==='sensible'?'sensible air only':'needs measurements'}</span><b>Q ≈ ${this.heatValue('qEvaporator')}</b></div><div><span>Condenser heat · water estimate</span><b>Q ≈ ${this.heatValue('qCondenser')}</b></div><div><span>Compressor · reported input</span><b>P = ${this.heatValue('compressor')}</b></div></div>
-      <details class="heat-details"><summary>Heat & power calculation details</summary><p>Condenser Q needs measured water flow (BF1), condenser water outlet (BT12) and return (BT3). Heating supply BT2 can include auxiliary heat, so it is not used for this calculation.</p><p>Evaporator Q uses Q condenser − P compressor when compressor input is positive. This is an approximate steady-state balance that neglects losses and stored heat. Without these inputs, airflow (BS1) and extract/discharge temperatures give sensible heat only; condensation and frost heat are excluded.</p><p>Compressor P uses the reported inverter-to-compressor input power (43141), not whole-unit consumption or a frequency estimate. Missing readings or unsupported units show —. Water estimates assume pure water; cloud samples are not synchronized.</p></details>
+      <div class="heat-summary"><div><span>Evaporator heat · ${this._heat.evaporatorMethod==='balance'?'estimated balance':this._heat.evaporatorMethod==='sensible'?'sensible air only':'needs measurements'}</span><b>Q ≈ ${this.heatValue('qEvaporator')}</b></div><div><span>Condenser heat · water estimate</span><b>Q ≈ ${this.heatValue('qCondenser')}</b></div><div><span>Compressor · ${this._heat.compressorMethod==='reported'?'reported input':this._heat.compressorMethod==='energy-average'?`${Math.round(this._heat.averageMinutes)} min energy average`:'needs power or energy history'}</span><b>${this._heat.compressorMethod==='energy-average'?'P avg ≈':'P ='} ${this.heatValue('compressor')}</b></div></div>
+      <details class="heat-details"><summary>Heat & power calculation details</summary><p>Condenser Q needs measured water flow (BF1), condenser water outlet (BT12) and return (BT3). Heating supply BT2 can include auxiliary heat, so it is not used for this calculation.</p><p>Evaporator Q uses Q condenser − P compressor only with a positive current power reading. Averaged compressor power is not mixed with current condenser heat. This is an approximate steady-state balance that neglects losses and stored heat. Without these inputs, airflow (BS1) and extract/discharge temperatures give sensible heat only; condensation and frost heat are excluded.</p><p>Compressor P uses current input power if exposed. Otherwise a compressor-only energy counter (kWh or Wh) and Home Assistant history give average P = Δenergy / Δtime over roughly 10 minutes. This average is not instantaneous and may include compressor-off periods. Unitless time factors are not treated as energy. If neither source is available, power cannot be identified from the current telemetry alone. Missing readings or unsupported units show —. Water estimates assume pure water; cloud samples are not synchronized.</p></details>
       <p class="sub" style="margin-top:16px">Conceptual connections · branch selection and water flow are not measured. Moving markers indicate compressor operation only.</p></section>
       <section class="panel controls"><div class="heading"><h2>Comfort controls</h2><span class="tag">Manual settings</span></div><p>Changes use your existing Home Assistant entities and require confirmation.</p><div class="control-grid">${this.control('heating','Heating adjustment')}${this.control('hot_water','Hot water mode')}</div><div class="notice" role="status" aria-live="polite"></div></section>
 

@@ -31,6 +31,21 @@ try {
   assert.equal(heatCases.off.qEvaporator,null);
   assert.equal(heatCases.energyInsteadOfPower.compressor,null);
   assert.equal(heatCases.blank.compressor,null);
+  const energyCases=await page.evaluate(async()=>{
+    const {powerFromEnergy,calculateHeat,discoverEntities}=await import('/dist/nibe-f750-card.js');
+    const now=Date.now(),row=(seconds,value,unit='kWh')=>({s:String(value),a:{unit_of_measurement:unit},lu:(now-seconds*1000)/1000});
+    const run=rows=>powerFromEnergy(rows,now);
+    return {valid:run([row(601,10),row(1,10.2)]),wh:run([row(601,10000,'Wh'),row(1,10200,'Wh')]),reset:run([row(601,10),row(300,0),row(1,1)]),unitless:run([row(601,10,''),row(1,11,'')]),hours:run([row(601,10,'h'),row(1,11,'h')]),stale:run([row(900,10),row(300,11)]),short:run([row(120,10),row(1,11)]),gap:run([row(601,10),row(300,'unavailable'),row(1,11)]),flat:run([row(601,10),row(1,10)]),averageHeat:calculateHeat({}, {}, {power:1.2,minutes:10}),found:discoverEntities([{platform:'myuplink',device_id:'pump',entity_id:'sensor.energy',unique_id:'renamed-device-43144'}],'pump').entities};
+  });
+  assert.ok(Math.abs(energyCases.valid.power-1.2)<1e-10);
+  assert.equal(energyCases.valid.minutes,10);
+  assert.ok(Math.abs(energyCases.wh.power-energyCases.valid.power)<1e-10);
+  assert.equal(energyCases.wh.minutes,energyCases.valid.minutes);
+  for(const key of ['reset','unitless','hours','stale','short','gap']) assert.equal(energyCases[key],null,key);
+  assert.equal(energyCases.flat.power,0);
+  assert.equal(energyCases.averageHeat.compressorMethod,'energy-average');
+  assert.equal(energyCases.averageHeat.evaporatorMethod,null);
+  assert.equal(energyCases.found.compressor_energy,'sensor.energy');
   // Keep the requested light palette even when the surrounding HA theme is dark.
   await page.evaluate(()=>document.body.style.setProperty('--primary-text-color','#fff'));
   assert.equal(await card.locator('ha-card').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(255, 255, 255)');
@@ -128,6 +143,20 @@ try {
   await page.evaluate(()=>{window.autoHass.callWS=async()=>{throw new Error('disconnected');};});
   await card.getByRole('button',{name:'Refresh discovery'}).click();
   await card.getByText(/Discovery failed/).waitFor();
+  await page.evaluate(()=>{
+    const c=document.querySelector('nibe-f750-card'),now=Date.now();window.historyRequests=[];
+    c.hass={states:{'sensor.energy':{state:'10.2',attributes:{unit_of_measurement:'kWh'}}},callWS:async request=>{
+      window.historyRequests.push(request);
+      return {'sensor.energy':[{s:'10',a:{unit_of_measurement:'kWh'},lu:(now-601000)/1000},{s:'10.2',a:{unit_of_measurement:'kWh'},lu:(now-1000)/1000}]};
+    }};
+    c.setConfig({entities:{compressor_energy:'sensor.energy'}});
+  });
+  await card.getByText('Compressor · 10 min energy average').waitFor();
+  assert.match(await card.locator('.heat-summary').textContent(),/P avg ≈ 1.2 kW/);
+  assert.equal(await page.evaluate(()=>window.historyRequests.at(-1).type),'history/history_during_period');
+  const requestCount=await page.evaluate(()=>window.historyRequests.length);
+  await card.evaluate(c=>c.hass=c._hass);
+  assert.equal(await page.evaluate(()=>window.historyRequests.length),requestCount);
   assert.deepEqual(errors,[]);
   console.log('PASS: diagrams, services, bounds, cancellation, errors, mobile layout, renamed entity discovery, disabled/unrelated filtering, device selection and discovery errors.');
 } finally { await browser.close(); }

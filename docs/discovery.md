@@ -20,7 +20,8 @@ The card excludes disabled entities and other integrations, scopes every match t
 | Compressor | 43136 | Actual frequency; not requested/target/min/max frequency |
 | Auxiliary heater | 43084 | Internal electrical addition power |
 | Operation | 49994 | Current priority |
-| Compressor power | 43141 | Reported inverter-to-compressor power; W converted to kW |
+| Compressor power | 43141 | Optional inverter-to-compressor power; may not be exposed by myUplink |
+| Compressor energy | 43144 | Optional compressor-only energy; history-derived average P requires Wh/kWh, not hours or a dimensionless time factor |
 | Water flow | 40072 | BF1 EP14 flow, requires physical volume/time units |
 | Condenser water outlet | 40017 | BT12, before auxiliary heating |
 | Airflow | 40050 | BS1, requires physical volume/time units (unitless readings are not assumed to be m³/h) |
