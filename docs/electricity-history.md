@@ -29,7 +29,7 @@ Update the integration through Marketplace, restart Home Assistant and refresh t
 
 History is persisted locally in Home Assistant storage. At first startup, an optional background Recorder query reconstructs available readings since the start of the week (or the past 12 hours, if earlier), and recovers previously recorded forecast attributes where available. It does not invent old predictions. Recorder-disabled/excluded/purged data and long recording gaps remain missing; new observations are still recorded normally. Backfill uses the currently learned model for the reference simulation and may therefore differ from a simulation that had been running since Monday. After import, completed historical costs are retained rather than rewritten each time the model learns.
 
-The integration adds a **NIBE electricity history** sensor for the cards. It reports chart and weekly data in attributes; the controller records independently of whether a dashboard is open. Calculation or Recorder failures are isolated from heating control.
+The integration adds a **NIBE electricity history** sensor for the cards. It reports chart and weekly data in attributes; the controller records independently of whether a dashboard is open. The large rolling-chart attribute is excluded from Recorder duplication because its history already persists in the local accounting store. Calculation or Recorder failures are isolated from heating control.
 
 The previews below use deterministic test data, not measurements from the owner's home.
 

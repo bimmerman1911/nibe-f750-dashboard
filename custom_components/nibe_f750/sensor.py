@@ -58,6 +58,10 @@ class ModelSensor(ControllerEntity, SensorEntity):
 
 
 class CostSensor(ControllerEntity, SensorEntity):
+    # The rolling chart is already persisted in our local accounting store.
+    # Avoid duplicating its large changing payload in Recorder on every update.
+    _unrecorded_attributes = frozenset({'electricity'})
+
     def __init__(self, controller):
         super().__init__(controller, 'electricity_history', 'NIBE electricity history')
 
