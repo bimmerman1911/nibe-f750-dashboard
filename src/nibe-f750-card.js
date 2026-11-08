@@ -9,16 +9,17 @@ const readings = {
   electrical_power: ['Electrical input', 'kW'], cop: ['COP', ''], electricity_price: ['Electricity price', ''],
   operation: ['Operating mode', ''], compressor_status: ['Compressor status', ''], shower_minutes: ['Shower time', 'min'],
   condenser_water_out: ['Condenser water outlet', '°C'], air_flow: ['Extract airflow', ''],
-  reference_air_flow: ['Reference airflow', ''],
+  reference_air_flow: ['Reference airflow', ''], pump_speed: ['GP1 speed', '%'],
   hot_water_charge: ['Hot water control', '°C'], hot_gas: ['Hot gas', '°C'], suction: ['Suction gas', '°C'],
   heating_supply: ['Heating supply after buffer', '°C'], heating_return: ['Heating return after buffer', '°C'], heater_out: ['Water after immersion heater', '°C'],
 };
 // F750 parameter IDs; myUplink unique IDs are `${device_id}-${parameter_id}`.
 // References and compatibility notes: docs/discovery.md.
-const points = {outdoor:['40004'],room:['40033'],hot_water:['40013'],supply:['40008'],return:['40012'],exhaust_air:['40025'],leaving_air:['40026'],evaporator:['40020'],condenser:['40019'],compressor_frequency:['43136'],heater_power:['43084'],operation:['49994'],compressor_status:['43427','43435'],shower_minutes:[],condenser_water_out:['40017'],air_flow:['40050'],reference_air_flow:['43124'],hot_water_charge:['40014'],hot_gas:['40018'],suction:['40022'],heating_supply:['40047'],heating_return:['40048'],heater_out:[]};
+const points = {pump_speed:[],outdoor:['40004'],room:['40033'],hot_water:['40013'],supply:['40008'],return:['40012'],exhaust_air:['40025'],leaving_air:['40026'],evaporator:['40020'],condenser:['40019'],compressor_frequency:['43136'],heater_power:['43084'],operation:['49994'],compressor_status:['43427','43435'],shower_minutes:[],condenser_water_out:['40017'],air_flow:['40050'],reference_air_flow:['43124'],hot_water_charge:['40014'],hot_gas:['40018'],suction:['40022'],heating_supply:['40047'],heating_return:['40048'],heater_out:[]};
 // API names can vary from the older F-series register catalog. Match only
 // explicit measurement names/BT designations, scoped to the selected device.
 const aliases = {
+  pump_speed: [/(?:^| )speed heating medium pump 1$/, /(?:^| )heating medium pump (?:1 |gp1 )?speed$/, /(?:^| )gp1 speed$/],
   outdoor: [/(?:^| )outdoor temperature(?: bt1)?$/, /(?:^| )bt1(?: outdoor temperature)?$/],
   room: [/(?:^| )(?:room|indoor) temperature(?: bt50)?$/, /(?:^| )bt50(?: room temp(?:erature)?(?: s1)?)?$/],
   hot_water: [/(?:^| )hot water (?:top|temperature top)(?: bt7)?$/, /(?:^| )bt7(?: hw top)?$/],
@@ -186,9 +187,9 @@ export class NibeF750Card extends HTMLElement {
     const result=calculateShowerTime(this._hass?.states||{},this.config.entities,this.config.shower);
     const value=result?`${result.estimated?'≈ ':''}${Math.floor(result.minutes)} min`:'— min';
     const title=result?.estimated?`Estimated shower time: ${result.volume} L tank, average BT6/BT7, ${result.target}°C shower, ${result.cold}°C cold inlet, ${result.flow} L/min. Ideal mixing; stratification and draw-off cooling are not resolved.`:'Available shower time; reported minutes when exposed, otherwise estimate needs BT6 and BT7.';
-    const iconX=anchor==='end'?x-100:x-28;
-    return `<g data-shower="${result?.estimated?'estimated':result?'reported':'unavailable'}"><title>${esc(title)}</title><path d="M${iconX} ${y-3}V${y-12}Q${iconX+8} ${y-19} ${iconX+15} ${y-12}L${iconX+19} ${y-8}M${iconX+10} ${y-5}L${iconX+8} ${y}M${iconX+16} ${y-3}L${iconX+14} ${y+2}M${iconX+22} ${y-1}L${iconX+20} ${y+4}" fill="none" stroke="#5a96bf" stroke-width="1.8"/><text class="shower" x="${x}" y="${y}" text-anchor="${anchor}">${value}</text></g>`;
+    return `<g data-shower="${result?.estimated?'estimated':result?'reported':'unavailable'}"><title>${esc(title)}</title><text class="shower" x="${x}" y="${y}" text-anchor="${anchor}">${value}</text></g>`;
   }
+
   diagram(portrait,a) {
     const prefix=portrait?'p':'l';
     const pipe=(name,d,color,active)=>`<g data-flow="${name}"><path class="pipe ${color}" d="${d}"/><path class="pipe flow ${active?'':'paused'} ${color.startsWith('air')?color:''}" d="${d}"/></g>`;
@@ -198,11 +199,12 @@ export class NibeF750Card extends HTMLElement {
     const heater=(x,y)=>`<g data-component="heater"><title>EB1 · common immersion heater before QN10</title><rect class="node" x="${x-32}" y="${y-18}" width="64" height="36" rx="9"/><path d="M${x-23} ${y}H${x-16}L${x-10} ${y-10}L${x-3} ${y+10}L${x+4} ${y-10}L${x+10} ${y}H${x+23}" fill="none" stroke="#dd8051" stroke-width="2"/><text x="${x}" y="${y+43}" text-anchor="middle">${this.value('heater_power')} ${this.unit('heater_power')}</text></g>`;
     const valve=(x,y)=>`<g data-component="diverter"><title>QN10 · changeover valve, heating or DHW</title><circle class="node" cx="${x}" cy="${y}" r="9"/><text class="sensor-code" x="${x-14}" y="${y+32}">QN10</text></g>`;
     const radiator=(x,y)=>`<rect class="node" x="${x-40}" y="${y}" width="80" height="50" rx="9"/><path d="M${x-26} ${y+10}V${y+40}M${x-13} ${y+10}V${y+40}M${x} ${y+10}V${y+40}M${x+13} ${y+10}V${y+40}M${x+26} ${y+10}V${y+40}" stroke="#dd8051" stroke-width="3"/>`;
-    const buffer=(x,y)=>`<g data-component="buffer"><title>Heating buffer vessel, simplified</title><rect class="node" x="${x-24}" y="${y}" width="48" height="35" rx="10"/><path d="M${x-13} ${y+12}H${x+13}M${x-13} ${y+23}H${x+13}" stroke="#c8d9df"/></g>`;
+    const pump=(x,y,angle,tx,ty)=>`<g data-component="circulation-pump"><title>GP1 · heating-medium pump on the common return to the condenser</title><circle class="node" cx="${x}" cy="${y}" r="14"/><path d="M-7 -8L9 0L-7 8Z" fill="#5a96bf" transform="translate(${x} ${y}) rotate(${angle})"/><text x="${tx}" y="${ty}" text-anchor="middle">${this.value('pump_speed')} %</text></g>`;
+    const ambient=(id,key,x,width,color)=>`<g data-sensor="${id}" class="ambient-panel" transform="translate(${x} -57)"><title>${id} · ${readings[key][0]}</title><rect width="${width}" height="78" rx="14" fill="${color}"/>${key==='room'?'<path d="M15 33L27 22L39 33V48H15Z" fill="none" stroke="#6d9b82" stroke-width="2"/>':'<circle cx="27" cy="35" r="7" fill="none" stroke="#719bb9" stroke-width="2"/><path d="M27 21V24M27 46V49M13 35H16M38 35H41M17 25L19 27M35 43L37 45M17 45L19 43M35 27L37 25" stroke="#719bb9" stroke-width="2"/>'}<text x="52" y="26" class="muted">${readings[key][0]}</text><text x="${width-12}" y="26" text-anchor="end" class="sensor-code">${id}</text><text x="52" y="53" style="font-size:18px;font-weight:600">${this.value(key)} ${this.available(this.state(key))?this.unit(key):''}</text></g>`;
     const shell=portrait?'0 -65 400 1175':'0 -65 1160 620';
     const desc='BT20 inlet air and BT21 outlet air are on the air duct. BT14 hot gas, BT17 suction, BT15 liquid line and BT16 evaporator are on the refrigerant side. BT12 is before the common heater; BT63 is after it and before QN10. BT61 and BT62 are on the heating circuit after the buffer. BT7 and BT6 are tank sensors. Arrows show normal flow; motion is illustrative, not measured flow.';
     return `<svg class="${portrait?'portrait':'landscape'}" viewBox="${shell}" role="img" aria-labelledby="${prefix}-title ${prefix}-desc"><title id="${prefix}-title">Combined F750 refrigerant and hydraulic circuits</title><desc id="${prefix}-desc">${desc}</desc>${portrait?`
-      ${sensor('BT1','outdoor',24,-30,43,-40)}<path class="ambient-house" d="M190 -25L205 -40L220 -25V-10H190Z"/>${sensor('BT50','room',205,-23,239,-40)}${this.config.demo?'<text class="demo-label" x="390" y="-40" text-anchor="end">Demo</text>':''}
+      ${ambient('BT1','outdoor',8,184,'#edf5fb')}${ambient('BT50','room',208,184,'#eef7f1')}${this.config.demo?'<text class="demo-label" x="390" y="31" text-anchor="end">Demo</text>':''}
       <rect x="6" y="35" width="388" height="410" rx="18" fill="#f6faf9"/><rect x="6" y="450" width="388" height="650" rx="18" fill="#faf8f5"/>
       ${pipe('refrigerant-suction','M100 210V130H195','ref-low',a.refrigerant)}
       ${pipe('refrigerant-discharge','M245 130H345V400H250','ref-high',a.refrigerant)}
@@ -227,18 +229,18 @@ export class NibeF750Card extends HTMLElement {
       ${pipe('water-dhw-coil','M310 875Q340 895 310 915Q280 935 310 955','hot',a.dhw)}
       ${pipe('water-dhw-return','M310 955V1060H95','cold',a.dhw)}
       ${pipe('water-common-return','M95 1060H15V432H170','cold',a.water)}
-      ${arrow(370,505,90,'hot')}${arrow(270,535,180,'hot')}${arrow(95,680,90,'hot')}${arrow(310,790,90,'hot')}${arrow(95,1010,90,'cold')}${arrow(225,1060,180,'cold')}${arrow(15,700,-90,'cold')}
-      ${heater(320,535)}${valve(220,535)}${buffer(95,705)}${radiator(95,790)}
+      ${arrow(370,505,90,'hot')}${arrow(270,535,180,'hot')}${arrow(95,680,90,'hot')}${arrow(310,790,90,'hot')}${arrow(95,1010,90,'cold')}${arrow(225,1060,180,'cold')}${arrow(15,650,-90,'cold')}
+      ${heater(320,535)}${valve(220,535)}${radiator(95,790)}${pump(15,700,-90,48,732)}
       <rect class="node" x="270" y="850" width="90" height="145" rx="22"/><path class="pipe hot" d="M310 850V875Q340 895 310 915Q280 935 310 955"/><path class="pipe cold" d="M310 955V995"/><path class="pipe flow ${a.dhw?'':'paused'}" d="M310 850V875Q340 895 310 915Q280 935 310 955V995"/>
       ${sensor('BT12','condenser_water_out',310,432,315,470,'end')}
       ${sensor('BT3','return',105,432,115,470)}<text x="210" y="510" text-anchor="middle" class="energy">Q = ${this.heatValue('qCondenser')}</text>
       ${sensor('BT63','heater_out',250,535,268,595,'end')}
       ${sensor('BT61','heating_supply',95,765,150,750)}
       ${sensor('BT62','heating_return',95,990,150,1005)}
-      ${this.showerLabel(225,915,'end')}${sensor('BT7','hot_water',350,870,380,825,'end')}
+      ${this.showerLabel(315,1020,'middle')}${sensor('BT7','hot_water',350,870,380,825,'end')}
       ${sensor('BT6','hot_water_charge',350,970,380,1020,'end')}
     `:`
-      ${sensor('BT1','outdoor',40,-25,60,-35)}<path class="ambient-house" d="M225 -20L240 -35L255 -20V-5H225Z"/>${sensor('BT50','room',240,-18,275,-35)}${this.config.demo?'<text class="demo-label" x="1130" y="-35" text-anchor="end">Demo</text>':''}
+      ${ambient('BT1','outdoor',8,190,'#edf5fb')}${ambient('BT50','room',214,190,'#eef7f1')}${this.config.demo?'<text class="demo-label" x="1130" y="-35" text-anchor="end">Demo</text>':''}
       <rect x="6" y="35" width="545" height="505" rx="18" fill="#f6faf9"/><rect x="560" y="35" width="590" height="505" rx="18" fill="#faf8f5"/>
       ${pipe('refrigerant-suction','M165 220V130H295','ref-low',a.refrigerant)}
       ${pipe('refrigerant-discharge','M345 130H466V220','ref-high',a.refrigerant)}
@@ -260,13 +262,13 @@ export class NibeF750Card extends HTMLElement {
       ${pipe('water-dhw-coil','M790 335Q830 350 790 370Q750 390 790 410','hot',a.dhw)}
       ${pipe('water-dhw-return','M790 410V470','cold',a.dhw)}
       ${pipe('water-common-return','M790 470H518V300','cold',a.water)}
-      ${arrow(590,115,0,'hot')}${arrow(850,115,0,'hot')}${arrow(970,220,90,'hot')}${arrow(790,275,90,'hot')}${arrow(970,420,90,'cold')}${arrow(620,470,180,'cold')}
-      ${heater(660,115)}${valve(790,115)}${buffer(970,145)}${radiator(970,240)}
+      ${arrow(590,115,0,'hot')}${arrow(850,115,0,'hot')}${arrow(970,220,90,'hot')}${arrow(790,275,90,'hot')}${arrow(970,420,90,'cold')}${arrow(590,470,180,'cold')}
+      ${heater(660,115)}${valve(790,115)}${radiator(970,240)}${pump(640,470,180,640,510)}
       <rect class="node" x="735" y="310" width="110" height="130" rx="24"/><path class="pipe hot" d="M790 310V335Q830 350 790 370Q750 390 790 410"/><path class="pipe cold" d="M790 410V440"/><path class="pipe flow ${a.dhw?'':'paused'}" d="M790 310V335Q830 350 790 370Q750 390 790 410V440"/>
       ${sensor('BT12','condenser_water_out',560,115,560,65)}${sensor('BT63','heater_out',730,115,740,65,'end')}
       ${sensor('BT3','return',550,470,560,510)}<text x="590" y="345" class="energy">Q = ${this.heatValue('qCondenser')}</text>
       ${sensor('BT61','heating_supply',970,205,1030,190)}${sensor('BT62','heating_return',970,390,1030,405)}
-      ${this.showerLabel(880,385)}${sensor('BT7','hot_water',835,335,875,325)}${sensor('BT6','hot_water_charge',835,415,875,445)}
+      ${this.showerLabel(790,463,'middle')}${sensor('BT7','hot_water',835,335,875,325)}${sensor('BT6','hot_water_charge',835,415,875,445)}
     `}</svg>`;
   }
   render() {

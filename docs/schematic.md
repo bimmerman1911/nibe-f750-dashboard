@@ -2,7 +2,7 @@
 
 Checked against NIBE's **Installatörshandbok, F750 Koppar, IHB SV 2218-2, 531385-2**, printed pages 11–12 (component/sensor definitions and locations) and 14 (system principle): [official NIBE PDF](https://assetstore.nibe.se/hcms/v2.4/entity/document/330612/storage/MzMwNjEyLzAvbWFzdGVy/download/Installat%C3%B6rshandbok_Fr%C3%A5nluftsv%C3%A4rmepumpar_F750_531385-2.pdf).
 
-This is a functional dashboard schematic. The buffer is simplified; secondary circulation pumps, bypasses, isolation valves, safety devices and variant-specific connections are omitted. It is not a service piping drawing. The heating-water circuit is separate from potable tank water and from refrigerant. The two primary-water branches represent QN10's alternative destinations, not simultaneous measured circulation.
+This is a functional dashboard schematic. The buffer vessel is omitted visually; secondary circulation pumps, bypasses, isolation valves, safety devices and variant-specific connections are omitted. It is not a service piping drawing. The heating-water circuit is separate from potable tank water and from refrigerant. The two primary-water branches represent QN10's alternative destinations, not simultaneous measured circulation.
 
 ## Temperature markers
 
@@ -10,8 +10,8 @@ A small circle marks the measuring location. A leader connects it to the BT iden
 
 | Marker | Location |
 | --- | --- |
-| BT1 | Outdoor sensor, upper ambient area of diagram |
-| BT50 | Room sensor, house symbol in upper ambient area |
+| BT1 | Outdoor sensor, blue ambient panel with outdoor symbol |
+| BT50 | Room sensor, green ambient panel with house symbol |
 | BT20 | Inlet/extract air duct before evaporator |
 | BT21 | Outlet/discharge air duct after evaporator, outside refrigerant loop |
 | BT16 | Evaporator |
@@ -42,3 +42,5 @@ Static chevrons show normal design direction. Animated dashes follow path direct
 The compressor-power and heat estimates are unchanged; see [heat calculations](heat-calculations.md).
 
 Shower time at the DHW tank: [reported duration or approximate mixing estimate](shower-time.md).
+
+GP1 is shown on the common return to the condenser, with the reported heating-medium pump 1 speed in percent. Discovery uses the explicit measurement name (including `sensor.vp_speed_heating_medium_pump_1`), not the manual-speed setting. Its percentage is display-only and remains excluded from the heat calculations. The DHW duration is plain text immediately below the tank.

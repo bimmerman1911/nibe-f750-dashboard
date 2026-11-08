@@ -10,6 +10,9 @@ try {
   await card.locator('.landscape [data-shower]').waitFor();
   assert.equal(await card.getByRole('img',{name:'Combined F750 refrigerant and hydraulic circuits'}).count(),1);
   assert.equal(await card.getByText('Smart control · planned').count(),0);
+  assert.equal(await card.locator('[data-component="buffer"]').count(),0);
+  assert.equal(await card.locator('[data-component="circulation-pump"]').count(),2);
+  assert.equal(await card.locator('[data-shower] path').count(),0);
   const topology=await card.evaluate(c=>[...c.shadowRoot.querySelectorAll('svg')].map(svg=>{
     const previous=svg.style.display;svg.style.display='block';
     const onPath=(path,point)=>{let best=Infinity;for(let i=0;i<=1000;i++){const p=path.getPointAtLength(path.getTotalLength()*i/1000);best=Math.min(best,Math.hypot(p.x-point.x,p.y-point.y));}return best;};
