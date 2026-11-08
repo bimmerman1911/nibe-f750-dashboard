@@ -38,7 +38,7 @@ The owner confirmed these room measurements:
 - DHW: preserve the original Normal/Economy time and price rules, including Normal overnight. The option must exist on `select.vp_comfort_mode`.
 - Optional existing `input_number.set_temp_c1/c2` helpers are updated locally for visibility. These are not NIBE cloud writes.
 
-Unknown/non-numeric or implausible room readings (outside 5–35°C), unavailable offsets, restored values, or room/offset states not reported for more than 30 minutes stop the cycle. The 5–35°C check rejects bad data; it is **not** a comfort band. Home Assistant's `last_reported` checks HA reports, not guaranteed physical sensor freshness. This trial does not yet compare C1's measured water supply against its required supply temperature; room-temperature priority and the linked target are its initial protection against C2 dominating. Both rooms need observation while tuning it.
+Unknown/non-numeric or implausible room readings (outside 5–35°C), unavailable offsets, restored values, or room/offset states not reported for more than 30 minutes stop the cycle. The 5–35°C check rejects bad data; it is **not** a comfort band. Home Assistant's `last_reported` checks HA reports, not guaranteed physical sensor freshness. The C1 supply guard now compares BT61 with C1's calculated supply target, as described below. Both rooms need observation while tuning it.
 
 The trial writes only the two heating offsets and DHW comfort mode. Native heat-pump control still determines compressor operation, degree minutes, inline heat, defrost and hygiene cycles. No claim is made that this first trial prevents every unnecessary inline-heater start.
 
@@ -63,3 +63,32 @@ Press **Pause control**, or turn off `input_boolean.nibe_smart_control_enabled`.
 Inspect the **NIBE bounded trial cycle** script traces, current room temperatures, offsets, and the `input_datetime.nibe_smart_control_last_cycle` / `last_attempt` helpers. Missing data can stop a cycle while the enable switch remains on. To return to the old setup, pause this controller first, inspect the current settings, then re-enable the old automations.
 
 Validation executes the package's actual Jinja templates and action tree with simulated HA states, failures and restored timestamps, plus browser checks of Start/Pause. It has not been installed or tested against the owner's Home Assistant instance. Run HA's own configuration check as part of installation.
+
+
+## Supply guard and telemetry update
+
+Replace the installed package with the current [`nibe_f750_trial.yaml`](../packages/nibe_f750_trial.yaml), check configuration and restart HA to add these entities. A HACS dashboard update does not update an already copied backend package. The normal startup quiet period still applies.
+
+The owner's entity export established these mappings:
+
+| Signal | Entity |
+| --- | --- |
+| Distribution supply proxy, BT61 | `sensor.vp_supply_line_bt61` |
+| Distribution return, BT62 | `sensor.vp_return_line_bt62` |
+| Required C1 supply | `sensor.vp_calculated_supply_climate_system_1` |
+| C2 supply / return | `sensor.vp_supply_line_ep21_bt2` / `sensor.vp_return_line_ep21_bt3` |
+| Required C2 supply | `sensor.vp_calculated_supply_climate_system_2` |
+| Degree minutes | `sensor.vp_degree_minutes_2` |
+| Inline power / status | `sensor.vp_power_internal_add_heat` / `sensor.vp_int_elec_add_heat` |
+
+BT61 is a shared distribution-supply proxy, not a direct measurement at each radiator. The entity named `sensor.vp_supply_line_bt2` has a friendly name identifying BT63 in the export; it is logged separately and is not silently treated as a confirmed C1-only measurement.
+
+A **2°C shortfall margin** is the initial trial setting, not a calibrated hydraulic model. C2 increases require fresh supply/target/priority readings, native Heating priority, and BT61 at least C1's required temperature minus that margin, as well as the existing C1 room-temperature condition. During DHW priority, C2 increases wait.
+
+`binary_sensor.nibe_c1_supply_shortfall` turns on after a shortfall persists for 15 minutes during Heating. While the shortfall still exists, the controller may reduce C2 by one offset step per permitted cycle, but only if C2 is within 0.3°C of its linked target or warmer. If C2 is already colder, it holds rather than lowering its request further. The diagnostic resets through DHW/other priority transitions; its delay restarts after HA restart. Review this margin and the response using history. No additional cloud settings are written and the existing write gate applies to all offset changes.
+
+`sensor.nibe_control_telemetry` captures a local snapshot every five minutes, whether trial control is enabled or paused. Its `readings` attribute includes room/outdoor/water temperatures, calculated targets, degree minutes, compressor frequency and reported limits, BT12, DHW temperatures, heater power/status/limit, offsets and current price. Unknown readings remain explicitly unknown. Snapshots contain HA report timestamps to distinguish old values. These are reads of existing HA state and do not cause NIBE cloud writes.
+
+Home Assistant's Recorder normally saves the telemetry sensor. If your Recorder uses an include/exclude list, ensure this sensor is recorded. Keep several days of history to tune the coupled model; the snapshot does not itself learn a model or produce measured COP/savings. No source meters based on the suspect hydraulic flow values are used as calibrated heat-output ground truth.
+
+The owner subsequently enabled inline heat on the pump. The earlier export's Blocked status and 0 kW configured limit are historical observations, not fixed controller assumptions. The trial reads/logs the current settings and leaves heater permission, maximum electrical addition and operating mode under native/manual control.

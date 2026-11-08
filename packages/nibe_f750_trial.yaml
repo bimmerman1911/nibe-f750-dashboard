@@ -17,6 +17,58 @@ input_datetime:
     has_date: true
     has_time: true
 
+template:
+  - binary_sensor:
+      - name: NIBE C1 supply shortfall
+        unique_id: nibe_c1_supply_shortfall
+        delay_on: "00:15:00"
+        availability: >-
+          {{ is_number(states('sensor.vp_supply_line_bt61'))
+             and is_number(states('sensor.vp_calculated_supply_climate_system_1'))
+             and has_value('sensor.vp_priority') }}
+        state: >-
+          {% set ns = namespace(fresh=true) %}
+          {% for e in ['sensor.vp_supply_line_bt61', 'sensor.vp_calculated_supply_climate_system_1', 'sensor.vp_priority'] %}
+            {% if state_attr(e, 'restored') == true or
+              as_timestamp(now()) - as_timestamp(states[e].last_reported, 0) > 1800 %}
+              {% set ns.fresh = false %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.fresh and is_state('sensor.vp_priority', 'Heating')
+             and states('sensor.vp_supply_line_bt61')|float(0)
+               < states('sensor.vp_calculated_supply_climate_system_1')|float(0) - 2 }}
+  - triggers:
+      - trigger: time_pattern
+        minutes: /5
+      - trigger: homeassistant
+        event: start
+    sensor:
+      - name: NIBE control telemetry
+        unique_id: nibe_control_telemetry
+        state: "{{ now().isoformat() }}"
+        attributes:
+          readings: >-
+            {% set ns = namespace(data={}) %}
+            {% for e in ['sensor.ovanvaning_temperature', 'sensor.nedervaning_temperature',
+              'sensor.vp_current_outd_temp_bt1', 'sensor.vp_average_outdoor_temp_bt1',
+              'sensor.vp_supply_line_bt61', 'sensor.vp_return_line_bt62',
+              'sensor.vp_supply_line_bt2', 'sensor.vp_return_line_bt3',
+              'sensor.vp_supply_line_ep21_bt2', 'sensor.vp_return_line_ep21_bt3',
+              'sensor.vp_calculated_supply_climate_system_1', 'sensor.vp_calculated_supply_climate_system_2',
+              'sensor.vp_degree_minutes_2', 'sensor.vp_priority', 'sensor.vp_current_compressor_frequency',
+              'sensor.vp_min_compressor_frequency', 'sensor.vp_max_compressor_frequency',
+              'sensor.vp_condenser_bt12', 'sensor.vp_power_internal_add_heat',
+              'sensor.vp_int_elec_add_heat', 'sensor.vp_hot_water_top_bt7', 'sensor.vp_hot_water_charging_bt6',
+              'sensor.vp_reference_air_speed_sensor', 'sensor.nordpool_kwh_se3_sek_3_10_025',
+              'number.vp_heating_offset_climate_system_1', 'number.vp_heating_offset_climate_system_2',
+              'select.vp_comfort_mode', 'select.vp_set_max_electrical_add', 'select.vp_op_mode',
+              'binary_sensor.nibe_c1_supply_shortfall', 'input_boolean.nibe_smart_control_enabled'] %}
+              {% set ns.data = dict(ns.data, **{e: {'value': states(e),
+                'unit': state_attr(e, 'unit_of_measurement'),
+                'reported_at': as_timestamp(states[e].last_reported, 0) if has_value(e) else none}}) %}
+            {% endfor %}
+            {{ ns.data }}
+
 automation:
   - id: nibe_smart_control_startup
     alias: NIBE controller startup quiet period
@@ -83,7 +135,25 @@ script:
           next_c2: >-
             {% set error = target_c2|float - room_c2|float(0) %}
             {% set c1_satisfied = room_c1|float(0) >= target_c1|float - 0.3 %}
-            {% set step = 1 if error > 0.3 and c1_satisfied else -1 if error < -0.3 else 0 %}
+            {% set ns = namespace(ready=true) %}
+            {% for e in ['sensor.vp_supply_line_bt61', 'sensor.vp_calculated_supply_climate_system_1', 'sensor.vp_priority'] %}
+              {% if not has_value(e) or state_attr(e, 'restored') == true or
+                as_timestamp(now()) - as_timestamp(states[e].last_reported, 0) > 1800 %}
+                {% set ns.ready = false %}
+              {% endif %}
+            {% endfor %}
+            {% set supply_ok = ns.ready and is_state('sensor.vp_priority', 'Heating')
+              and is_number(states('sensor.vp_supply_line_bt61'))
+              and is_number(states('sensor.vp_calculated_supply_climate_system_1'))
+              and states('sensor.vp_supply_line_bt61')|float(0)
+                >= states('sensor.vp_calculated_supply_climate_system_1')|float(0) - 2 %}
+            {% set persistent_shortfall = ns.ready and not supply_ok
+              and is_number(states('sensor.vp_supply_line_bt61'))
+              and is_number(states('sensor.vp_calculated_supply_climate_system_1'))
+              and is_state('sensor.vp_priority', 'Heating')
+              and is_state('binary_sensor.nibe_c1_supply_shortfall', 'on') %}
+            {% set step = -1 if error < -0.3 or (persistent_shortfall and error <= 0.3)
+              else 1 if error > 0.3 and c1_satisfied and supply_ok else 0 %}
             {{ current_c2|float(0) + step }}
           next_dhw: >-
             {% set e = 'sensor.nordpool_kwh_se3_sek_3_10_025' %}

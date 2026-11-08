@@ -31,6 +31,9 @@ class Fixture:
                        'sensor.ovanvaning_temperature': '19.2',
                        'sensor.nedervaning_temperature': '18.2',
                        PRICE: '0.8', 'sensor.vp_average_outdoor_temp_bt1': '5',
+                       'sensor.vp_supply_line_bt61': '36',
+                       'sensor.vp_calculated_supply_climate_system_1': '34',
+                       'sensor.vp_priority': 'Heating',
                        'sensor.vp_exhaust_air_bt20': '20', 'select.vp_comfort_mode': 'Economy'}
         self.attrs = {C1: {'min': -10, 'max': 10}, C2: {'min': -10, 'max': 10},
                       'select.vp_comfort_mode': {'options': ['Normal', 'Economy']},
@@ -48,6 +51,7 @@ class Fixture:
         self.env.globals.update(states=States(),
             state_attr=lambda e, k: self.attrs.get(e, {}).get(k),
             has_value=lambda e: self.states.get(e, 'unknown') not in ('unknown', 'unavailable'),
+            is_state=lambda e, v: self.states.get(e) == v,
             is_number=lambda v: self.number(v),
             now=lambda: dt.datetime.fromtimestamp(self.time, dt.timezone.utc),
             as_timestamp=self.timestamp)
@@ -222,10 +226,46 @@ class TrialTests(unittest.TestCase):
         f.reported['sensor.ovanvaning_temperature'] = f.time - 1801
         f.cycle()
         self.assertEqual(f.calls, [])
+
         f = Fixture()
         f.attrs['sensor.nedervaning_temperature'] = {'restored': True}
         f.cycle()
         self.assertEqual(f.calls, [])
+
+    def test_c2_supply_guard_and_dhw_transition(self):
+        for actual, priority in [('31', 'Heating'), ('36', 'Hot water')]:
+            f = Fixture()
+            f.states.update({'sensor.ovanvaning_temperature': '20',
+                             'sensor.vp_supply_line_bt61': actual, 'sensor.vp_priority': priority})
+            self.assertEqual(float(f.cycle()['next_c2']), 0)
+        f = Fixture()
+        f.states['sensor.ovanvaning_temperature'] = '20'
+        f.reported['sensor.vp_supply_line_bt61'] = f.time - 1801
+        self.assertEqual(float(f.cycle()['next_c2']), 0)
+
+    def test_persistent_shortfall_reduces_only_when_c2_near_target(self):
+        f = Fixture()
+        f.states.update({'sensor.nedervaning_temperature': '19',
+                         'sensor.vp_supply_line_bt61': '31',
+                         'binary_sensor.nibe_c1_supply_shortfall': 'on'})
+        self.assertEqual(float(f.cycle()['next_c2']), -1)
+        f = Fixture()
+        f.states['binary_sensor.nibe_c1_supply_shortfall'] = 'on'
+        self.assertEqual(float(f.cycle()['next_c2']), 0)  # C2 is already cold.
+
+    def test_shortfall_template_and_telemetry(self):
+        f = Fixture()
+        guard = PACKAGE['template'][0]['binary_sensor'][0]
+        self.assertEqual(guard['delay_on'], '00:15:00')
+        self.assertFalse(f.render(guard['state'], {}))
+        f.states['sensor.vp_supply_line_bt61'] = '31'
+        self.assertTrue(f.render(guard['state'], {}))
+        f.states['sensor.vp_priority'] = 'Hot water'
+        self.assertFalse(f.render(guard['state'], {}))
+        telemetry = PACKAGE['template'][1]['sensor'][0]['attributes']['readings']
+        readings = f.render(telemetry, {})
+        self.assertEqual(readings['sensor.vp_supply_line_bt61']['value'], '31')
+        self.assertEqual(readings['sensor.vp_hot_water_top_bt7']['value'], 'unknown')
 
     def test_dhw_price_rule_and_night_override(self):
         f = Fixture()
