@@ -210,6 +210,30 @@ try {
   assert.match(await card.locator('.portrait').textContent(),/Q = 2.25 kW/);
   await card.evaluate(c=>{c.hass={...c._hass,states:{...c._hass.states,f:{state:'100',attributes:{unit_of_measurement:'Hz'}}}};});
   assert.match(await card.locator('.portrait').textContent(),/P = 1.61 kW/);
+  // Simulate a Sections grid followed by another card, including a resize.
+  for(const width of [390,1100,500]) {
+    await page.setViewportSize({width,height:1500});
+    await page.evaluate(()=>{
+      const card=document.querySelector('nibe-f750-card');
+      let grid=document.querySelector('#layout-check');
+      if(!grid){
+        grid=document.createElement('div');grid.id='layout-check';
+        grid.style.cssText='display:grid;grid-template-columns:minmax(0,1fr);grid-auto-rows:minmax(56px,auto);gap:8px;';
+        card.parentNode.insertBefore(grid,card);grid.append(card);
+        const next=document.createElement('div');next.id='next-card';next.style.height='80px';grid.append(next);
+      }
+      const rows=card.getGridOptions().rows;
+      card.style.gridRow=rows==='auto'?'auto':`span ${rows}`;
+    });
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    const layout=await card.evaluate(c=>({rows:c.getGridOptions().rows,
+      bottom:c.shadowRoot.querySelector('ha-card').getBoundingClientRect().bottom,
+      height:c.shadowRoot.querySelector('ha-card').getBoundingClientRect().height,
+      next:document.querySelector('#next-card').getBoundingClientRect().top,size:c.getCardSize()}));
+    assert.equal(layout.rows,'auto');
+    assert.ok(layout.next>=layout.bottom,`Following card overlaps at width ${width}`);
+    assert.ok(layout.size*50>=layout.height);
+  }
   assert.deepEqual(errors,[]);
   console.log('PASS: diagram-only layout, formulas, topology, compressor stop states, air colors, shower time, mobile layout and device discovery.');
 } finally { await browser.close(); }

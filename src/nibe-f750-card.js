@@ -174,8 +174,13 @@ export class NibeF750Card extends HTMLElement {
     }
   }
   static getStubConfig() { return {type:'custom:nibe-f750-card'}; }
-  getCardSize() { return 12; }
-  getGridOptions() { return {columns:24, min_columns:6, rows:12}; }
+  getCardSize() {
+    const measured=this.shadowRoot.querySelector('ha-card')?.getBoundingClientRect().height;
+    if(measured>0)return Math.ceil(measured/50);
+    const width=this.clientWidth||400,content=Math.max(0,width-26);
+    return Math.ceil((26+(width<=700?content*1335/400:Math.max(820,content)*620/1160))/50);
+  }
+  getGridOptions() { return {columns:24, min_columns:6, rows:'auto'}; }
   state(key) {
     let id=this.config?.entities?.[key];
     if(!id&&key==='room_c1')id=!this._manual&&this._hass?.states['sensor.ovanvaning_temperature']?'sensor.ovanvaning_temperature':this.config?.entities?.room;
