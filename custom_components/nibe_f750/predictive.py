@@ -92,6 +92,7 @@ class Node:
     step: object = None
     charging: bool = False
     miss: float = 0.
+    violation: float = 0.
 
 
 def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
@@ -114,7 +115,7 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
         return {'status':'Waiting for forecast', 'message':'At least six continuous hours of prices and weather are needed.', 'steps':[]}
     if not (5<=room<=35 and 10<=tank<=80 and 0<min_hz<=max_hz<=150):
         raise ValueError('Current model inputs are invalid')
-    def solve(auxiliary,width):
+    def solve(auxiliary,width,recovery=False):
         actions=[('off',0.,0.,0.,0.), ('heat',m['compressor_heat_kw']*max(.5,min_hz/max_hz),0.,max(min_hz,max_hz*.5),0.),
                  ('heat',m['compressor_heat_kw'],0.,max_hz,0.),('dhw',0.,m['dhw_heat_kw'],max_hz,0.)]
         limit=m.get('auxiliary_limit_kw',m.get('auxiliary_step_kw',1.))
@@ -147,9 +148,9 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
                     stored,delivered=filtered_heat(prev.heat,qh,s['dt'],m.get('heating_lag_hours',0.))
                     draw=profile[s.get('local_hour',0)] if profile is not None else m['dhw_draw_kw']
                     nr,nw=thermal_step(prev.room,prev.water,s['outdoor'],s['dt'],delivered,qw,m,draw)
-                    if not min(room,m['room_min_c'])-1e-7<=nr<=max(room,m['room_max_c'])+1e-7:
+                    if not (min(room,16.) if recovery else min(room,m['room_min_c']))-1e-7<=nr<=max(room,m['room_max_c'])+1e-7:
                         continue
-                    if not min(tank,m['tank_min_c'])-1e-7<=nw<=max(tank,m['tank_max_c'])+1e-7:
+                    if not (min(tank,30.) if recovery else min(tank,m['tank_min_c']))-1e-7<=nw<=max(tank,m['tank_max_c'])+1e-7:
                         continue
                     bt12=m.get('dhw_supply_c',55) if mode=='dhw' else m.get('supply_c',38)
                     power=hz*(.0161+.000208*(bt12-45))
@@ -160,16 +161,16 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
                         min(15.,prev.mode_time+minutes) if mode==prev.mode else min(15.,minutes),
                         prev.cost+(power+inline)*s['dt']*s['price'],prev.aux+inline*s['dt'],prev,
                         {**s,'action':mode,'hz':hz,'inline_kw':inline,'room':nr,'water':nw,
-                         'compressor_kw':power,'delivered_heat_kw':delivered,'dhw_mode':'Normal' if mode=='dhw' else 'Economy'},charging=charging,miss=prev.miss+(max(0,m['tank_max_c']-.5-nw) if s.get('dhw_deadline') else 0))
+                         'compressor_kw':power,'delivered_heat_kw':delivered,'dhw_mode':'Normal' if mode=='dhw' else 'Economy'},charging=charging,violation=prev.violation+s['dt']*(2000*max(0,m['room_min_c']-nr)**2+200*max(0,m['tank_min_c']-nw)**2),miss=prev.miss+(max(0,m['tank_max_c']-.5-nw) if s.get('dhw_deadline') else 0))
                     key=(round(nr*20),round(nw*4),round(stored*2),mode,round(node.run),round(node.off),round(node.mode_time),charging)
                     old=unique.get(key)
-                    if old is None or (node.miss,node.aux,node.cost)<(old.miss,old.aux,old.cost):
+                    if old is None or ((node.miss,node.violation,node.aux,node.cost)<(old.miss,old.violation,old.aux,old.cost) if recovery else (node.miss,node.aux,node.cost)<(old.miss,old.aux,old.cost)):
                         unique[key]=node
             def rank(n):
                 next_due=next((q['end'] for q in slots[i:] if q.get('dhw_deadline')),None)
                 urgent=0 if next_due is None else 100*max(0,m['tank_max_c']-.5-n.water)**2/(1+(next_due-s['end'])/3600)**2
                 deficit=max(0,m['room_target_c']-n.room)**2*40+max(0,m['tank_target_c']-n.water)**2*2
-                return (n.miss,n.aux,n.cost+progress**4*deficit+urgent)
+                return (n.violation+progress**4*deficit*100,n.miss,n.aux,n.cost+urgent) if recovery else (n.miss,n.aux,n.cost+progress**4*deficit+urgent)
             ordered=sorted(unique.values(),key=rank)
             buckets={}
             for n in ordered:
@@ -179,8 +180,8 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
             states += [n for n in ordered if id(n) not in ids][:width-len(states)]
             if not states:
                 return None
-        feasible=[n for n in states if n.room>=m['room_target_c']-1e-7 and n.water>=m['tank_target_c']-1e-7]
-        return min(feasible,key=lambda n:(n.miss,n.aux,n.cost)) if feasible else None
+        feasible=states if recovery else [n for n in states if n.room>=m['room_target_c']-1e-7 and n.water>=m['tank_target_c']-1e-7]
+        return min(feasible,key=lambda n:(n.violation+4000*max(0,m['room_target_c']-n.room)**2+400*max(0,m['tank_target_c']-n.water)**2,n.miss,n.aux,n.cost) if recovery else (n.miss,n.aux,n.cost)) if feasible else None
     best=solve(False,beam)
     if best is None:
         best=solve(False,beam*3)
@@ -189,6 +190,16 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
         supported=solve(True,beam)
         if supported is not None and (best is None or (supported.miss,supported.aux,supported.cost)<(best.miss,best.aux,best.cost)):
             best=supported
+    recovery=False
+    if best is None:
+        recovery=True
+        best=solve(False,beam,True)
+        if m.get('auxiliary_limit_kw',m.get('auxiliary_step_kw',1.))>0:
+            supported=solve(True,beam,True)
+            def recovery_rank(n):
+                return (n.violation+4000*max(0,m['room_target_c']-n.room)**2+400*max(0,m['tank_target_c']-n.water)**2,n.miss,n.aux,n.cost)
+            if supported is not None and (best is None or recovery_rank(supported)<recovery_rank(best)):
+                best=supported
     compressor_only=best is not None and best.aux<.01
     if best is None:
         return {'status':'No feasible schedule','message':'Using thermostat control: no schedule found within capacity and comfort limits.', 'steps':[]}
@@ -199,7 +210,9 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
     steps.reverse()
     action=steps[0]['action']
     description={'off':'Using stored heat','heat':'Building heating reserve','dhw':'Preparing hot water'}[action]
+    if recovery:
+        description='Recovery plan: restoring comfort with available capacity and heat delay'
     return {'status':'Adaptive schedule','message':description,'steps':steps,
-            'dhw_deadline_shortfall_c':best.miss,'model_cost':best.cost,'inline_kwh':best.aux,'compressor_only':compressor_only,
+            'recovery_plan':recovery,'constraint_violation_score':best.violation,'dhw_deadline_shortfall_c':best.miss,'model_cost':best.cost,'inline_kwh':best.aux,'compressor_only':compressor_only,
             'model':m,'horizon_end':slots[-1]['end'],
             'scope':'Active supervisory control through heating targets and DHW comfort mode.'}

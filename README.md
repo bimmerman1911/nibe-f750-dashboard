@@ -63,6 +63,10 @@ Update through Marketplace, restart HA and refresh the browser. No YAML, activat
 
 Normal now follows the current DHW reservation, with low-reserve/necessary-charge exceptions and a daily 06:00 full-charge objective. A live failsafe enables Normal in time for a conservative charge estimate. Demand prediction uses the existing learned hourly usage profile; the power forecast now accounts for native charging thresholds and learned compressor fraction. [Operation and physical limits](docs/dhw-control.md).
 
+## Recovery planning (v0.20.1)
+
+If strict comfort/terminal constraints yield no schedule, the planner now searches an explicit recovery trajectory instead of immediately abandoning optimisation. Recovery prioritises reducing predicted comfort/reserve shortfalls and restoring the normal targets over price. It reports **Recovery plan**; it does not change configured temperature limits or unblock auxiliary heat. The secondary circuit can recover while upstairs is below target when measured supply is sufficient; real supply shortfalls and DHW priority still prevent an increase.
+
 ## Cards and calculations
 
 The existing light, portrait-friendly combined refrigerant/hydraulic circuit card is unchanged. It shows positional temperatures, animated operation, Q/P and approximate shower minutes.

@@ -216,4 +216,4 @@ def plan_offsets(result,states,now,response,min_hz,max_hz):
             'compressor_only':all(s['inline_kw']<.01 for s in best['path']),
             'dhw_deadline_shortfall_c':sum(max(0,m['tank_max_c']-.5-s['water']) for s in best['path'] if s.get('dhw_deadline')),
             'offset_response':response,'control_basis':'Offset optimisation with degree-minute and supply response',
-            'message':'Offsets planned from prices, weather and learned heat response'}
+            'message':'Recovery plan: restoring heating and hot-water reserves with available capacity' if result.get('recovery_plan') else 'Offsets planned from prices, weather and learned heat response'}

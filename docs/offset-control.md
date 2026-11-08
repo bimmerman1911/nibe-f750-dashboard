@@ -21,3 +21,9 @@ The optimiser runs in Home Assistant's executor, using existing forecast refresh
 Fresh degree minutes, supply/required temperature, outdoor temperature, compressor frequency/limit, inline power, room and tank readings are required. If these or forecasts are unavailable, the controller uses ordinary fixed-20°C temperature control and Normal DHW. There is no longer a price-triggered 19°C fallback. Pause and DHW reserve handling are unchanged.
 
 The forecast's power lines now use the offset simulation's estimated demand. Historical predictions remain as issued. Existing cost history and the ordinary-thermostat comparison are retained.
+
+## Near-limit recovery (v0.20.1)
+
+Starting with a cold house, depleted DHW and delayed heating can make the strict scheduler reject every path, including paths that eventually recover. A hard end-of-horizon target can also reject the best attainable path. After the ordinary strict searches fail, a separate recovery search prioritises accumulated indoor/DHW shortfall and restoration of the normal end targets ahead of cost. It may predict a temporary excursion below the configured comfort floor, which was already physically unavoidable in some states; configured targets are not lowered and the schedule is explicitly labelled Recovery plan. A best-effort recovery does not claim all comfort constraints are met. Normal upper temperature bounds and absolute recovery guards remain enforced, and blocked/zero auxiliary capacity stays blocked/zero. Unavailable readings or failure to find even a bounded recovery still use the existing fallback.
+
+Secondary-circuit recovery no longer requires upstairs to be within 0.3°C of target. It still requires heating priority and a valid measured supply without a temperature shortfall. This avoids a cold secondary circuit remaining at its minimum offset solely because upstairs is also cold. Cloud-write timing is unchanged.
