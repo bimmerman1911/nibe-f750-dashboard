@@ -80,6 +80,11 @@ try {
   assert.deepEqual(cases.fahrenheit,cases.normal);
   assert.ok(Math.abs(cases.litres.qEvaporator-cases.normal.qEvaporator)<1e-10);
   assert.equal(cases.off.compressor,0);
+  assert.equal(cases.off.cop,null);
+  assert.ok(Math.abs(cases.normal.cop-cases.normal.qCondenser/cases.normal.compressor)<1e-10);
+  assert.equal(cases.missing.cop,null);
+  assert.match(await card.locator('.portrait [data-cop]').textContent(),/COP ≈ 3.4/);
+  assert.match(await card.locator('.landscape [data-cop]').textContent(),/COP ≈ 3.4/);
   for(const key of ['badFrequency','wrongFrequencyUnit','blank','missingBT12','badModel','missing']) {
     assert.equal(cases[key].compressor,null,key);
     assert.equal(cases[key].qCondenser,null,key);
@@ -98,7 +103,7 @@ try {
   assert.equal(await card.locator('ha-card').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(255, 255, 255)');
   assert.equal(await card.locator('header,.stats,.controls,details').count(),0);
   assert.equal(await card.getByRole('button').count(),0);
-  assert.equal(await card.locator('.portrait .energy').evaluateAll(es=>es.length===3&&es.every(e=>getComputedStyle(e).fontWeight==='700'&&parseFloat(getComputedStyle(e).fontSize)>=15)),true);
+  assert.equal(await card.locator('.portrait .energy').evaluateAll(es=>es.length===4&&es.every(e=>getComputedStyle(e).fontWeight==='700'&&parseFloat(getComputedStyle(e).fontSize)>=15)),true);
   const airColors=await card.evaluate(c=>{
     const svg=c.shadowRoot.querySelector('.landscape');
     return [getComputedStyle(svg.querySelector('[data-flow="air-inlet"] .flow')).stroke,getComputedStyle(svg.querySelector('[data-flow="air-outlet"] .flow')).stroke];
@@ -108,12 +113,14 @@ try {
     await card.evaluate((c,state)=>{window.demoHass.states={...window.demoHass.states,'sensor.demo_compressor_frequency':{state,attributes:{unit_of_measurement:'Hz'}}};c.hass=window.demoHass;},state);
     assert.equal(await card.locator('[data-flow^="refrigerant"] .flow:not(.paused)').count(),0,state);
     assert.equal(await active('air-outlet'),1);
+    assert.match(await card.locator('.portrait [data-cop] text').textContent(),/—/);
   }
   await card.evaluate(c=>{
     c.config.entities.compressor_status='sensor.demo_status';
     window.demoHass.states={...window.demoHass.states,'sensor.demo_compressor_frequency':{state:'52',attributes:{unit_of_measurement:'Hz'}},'sensor.demo_status':{state:'Stopped',attributes:{}}};c.hass=window.demoHass;
   });
   assert.equal(await card.locator('[data-flow^="refrigerant"] .flow:not(.paused)').count(),0);
+  assert.match(await card.locator('.portrait [data-cop] text').textContent(),/—/);
   await card.evaluate(c=>{delete c.config.entities.compressor_status;window.demoHass.states={...window.demoHass.states,'sensor.demo_compressor_frequency':{state:'52',attributes:{unit_of_measurement:'Hz'}}};c.hass=window.demoHass;});
   assert.equal(await active('refrigerant-suction'),1);
   const showers=await page.evaluate(async()=>{

@@ -36,7 +36,7 @@ The diagram says **Q = … kW**, with an estimate tooltip. **Details** retains t
 
 This follows the owner's requested heat balance. Corrupt liquid-flow/pump readings are excluded entirely. BF1 water flow and BT3 return are not read by this calculation. Auxiliary electrical heater power is separate and is not added to condenser Q. If either input is missing, condenser Q stays blank; there is no fallback to the water-side estimate.
 
-This is a sensible-based condenser estimate, not measured total output. It inherits omitted latent heat, power-model error and reference-flow uncertainty. It neglects heat losses and thermal storage. Cloud readings are sampled asynchronously and may be particularly unrepresentative during starts, stops or defrost. No accuracy band is claimed, and no automatic control or COP calculation uses these estimates.
+This is a sensible-based condenser estimate, not measured total output. It inherits omitted latent heat, power-model error and reference-flow uncertainty. It neglects heat losses and thermal storage. Cloud readings are sampled asynchronously and may be particularly unrepresentative during starts, stops or defrost. No accuracy band is claimed, and no automatic control uses these diagram estimates. From v0.19.3 the diagram shows estimated heating COP = condenser Q / compressor P inside the refrigerant circuit, rounded to one decimal place. It excludes inline-heater power and inherits the sensible-air and compressor-model limitations above. COP is blank when the compressor is stopped, power is zero, or required readings are missing.
 
 Example: 60 Hz, BT12 = 45°C → P_est = 0.966 kW. Reference airflow 180 m³/h and a 24°C air temperature drop → Q_evap,sensible ≈ 1.449 kW; derived Q_cond ≈ 2.415 kW.
 

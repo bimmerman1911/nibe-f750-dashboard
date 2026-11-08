@@ -98,7 +98,8 @@ export function calculateHeat(states, entities) {
   const qEvaporator=Number.isFinite(sensible)?sensible:null;
   const sum=qEvaporator!==null && compressor!==null?qEvaporator+compressor:null;
   const qCondenser=Number.isFinite(sum)?sum:null;
-  return {compressor,compressorMethod:compressor!==null?'frequency-bt12':null,qCondenser,qEvaporator,evaporatorMethod:qEvaporator!==null?(useReference?'reference-sensible':'sensible'):null};
+  const cop=qCondenser!==null && compressor>0?qCondenser/compressor:null;
+  return {cop,compressor,compressorMethod:compressor!==null?'frequency-bt12':null,qCondenser,qEvaporator,evaporatorMethod:qEvaporator!==null?(useReference?'reference-sensible':'sensible'):null};
 }
 export function calculateShowerTime(states,entities,options={}) {
   const number=key=>{
@@ -246,6 +247,11 @@ export class NibeF750Card extends HTMLElement {
     const n=this._heat[key];
     return n===null?'—':`${new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(n)} kW`;
   }
+  copLabel(x,y,running) {
+    const cop=running && Number.isFinite(this._heat.cop)?this._heat.cop:null;
+    const value=cop===null?'—':new Intl.NumberFormat(undefined,{maximumFractionDigits:1}).format(cop);
+    return `<g data-cop><title>Estimated heating COP = condenser Q / compressor P. Excludes inline heater; based on the air-side sensible heat estimate.</title><text class="energy" x="${x}" y="${y}" text-anchor="middle">COP ≈ ${value}</text></g>`;
+  }
   sensor(id,key,x,y,tx,ty,anchor='start') {
     return `<g class="sensor" data-sensor="${id}"><title>${id} · ${readings[key][0]}</title><path class="sensor-leader" d="M${x} ${y}L${tx} ${ty-8}"/><circle class="sensor-dot" cx="${x}" cy="${y}" r="3"/><text x="${tx}" y="${ty}" text-anchor="${anchor}"><tspan class="sensor-code">${id}</tspan><tspan x="${tx}" dy="18">${this.value(key)} ${this.available(this.state(key))?this.unit(key):''}</tspan></text></g>`;
   }
@@ -285,7 +291,7 @@ export class NibeF750Card extends HTMLElement {
       ${sensor('BT17','suction',150,130,140,70)}
       ${sensor('BT14','hot_gas',300,130,350,70,'end')}
       ${sensor('BT16','evaporator',100,240,160,235)}<text x="160" y="285" class="energy">Q = ${this.heatValue('qEvaporator')}</text>
-      ${sensor('BT15','condenser',130,400,210,333,'end')}
+      ${sensor('BT15','condenser',130,400,210,333,'end')}${this.copLabel(270,345,a.refrigerant)}
       ${pipe('water-common-supply','M250 432H370V535H220','hot',a.water)}
       ${pipe('water-heating-supply','M220 535H95V790','hot',a.heating)}
       ${pipe('water-dhw-supply','M220 535V640H310V875','hot',a.dhw)}
@@ -317,7 +323,7 @@ export class NibeF750Card extends HTMLElement {
       ${sensor('BT20','exhaust_air',65,175,12,95)}${sensor('BT21','leaving_air',55,375,12,455)}
       ${sensor('BT17','suction',230,130,200,85)}${sensor('BT14','hot_gas',400,130,430,85,'end')}
       ${sensor('BT16','evaporator',165,260,245,250)}<text x="245" y="302" class="energy">Q = ${this.heatValue('qEvaporator')}</text>
-      ${sensor('BT15','condenser',466,350,425,345,'end')}
+      ${sensor('BT15','condenser',466,350,425,345,'end')}${this.copLabel(320,355,a.refrigerant)}
       ${pipe('water-common-supply','M518 220V115H790','hot',a.water)}
       ${pipe('water-heating-supply','M790 115H970V240','hot',a.heating)}
       ${pipe('water-dhw-supply','M790 115V335','hot',a.dhw)}
