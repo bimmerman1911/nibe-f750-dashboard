@@ -43,9 +43,15 @@ Standard storage-mode dashboard resources are registered automatically, includin
 - **At most three setting attempts in a rolling 15-minute window**, unchanged values skipped. Durable reservation before dispatch, timestamps after completion, no immediate retry after failure. Other automations/NIBE app actions and myUplink internal HTTP retries are outside this controller's budget.
 - Local telemetry every five minutes in `sensor.nibe_control_telemetry`, normally retained by HA Recorder. Source report timestamps are included.
 
-The controller writes only the two heating offsets and DHW comfort mode. Native NIBE control owns compressor, inline-heater permission/limit, defrost and hygiene. **Forecast-based scheduling remains a planning model, not the live controller.** No calibrated COP, globally optimal cost or guaranteed inline-heater avoidance is claimed.
+The controller writes only the two heating offsets and DHW comfort mode. Native NIBE control owns compressor, inline-heater permission/limit, defrost and hygiene. **The new forecast backend runs automatically and records recommendations; live settings still follow the existing thermostat/DHW policy.** No calibrated COP, globally optimal cost or guaranteed inline-heater avoidance is claimed.
 
 Status is reported by the backend: Starting, Running, Paused, Waiting for readings, Legacy backend detected, Write failed or Controller error. Running means the control loop is active; check HA logs and actual settings to investigate rejected cloud requests.
+
+## First predictive backend (v0.16)
+
+Upcoming Nord Pool prices and hourly weather now feed a background heating/DHW planner. The card shows a Heating outlook, modelled indoor/tank ranges and price-aligned recommendations. Initial assumptions are configurable from integration options. No circuit-dependency explanations are shown in the card.
+
+Update in Marketplace, restart HA and refresh the browser. [Inputs, assumptions, logging and validation limits](docs/predictive-control.md).
 
 ## Cards and calculations
 
@@ -60,6 +66,6 @@ The existing light, portrait-friendly combined refrigerant/hydraulic circuit car
 
 `npm run build` regenerates the standalone distributable and identical integration frontend. `npm run check` verifies both copies. Run `python -m http.server 8080` for `/demo/` and `/demo/smart.html`.
 
-Run `python tests/integration_test.py` for policy/runtime tests. The archived package regression checks need PyYAML/Jinja2 (`python tests/control_test.py`). Browser checks use Playwright and a running preview server (`npm test`). CI also runs HA's hassfest validation.
+Run `python tests/predictive_test.py` for price/weather/model/source checks and `python tests/integration_test.py` for policy/runtime tests. The archived package regression checks need PyYAML/Jinja2 (`python tests/control_test.py`). Browser checks use Playwright and a running preview server (`npm test`). CI also runs HA's hassfest validation.
 
 Validation uses deterministic HA-shaped fixtures and browsers; installation on the owner's HA instance has not been verified remotely. Independent community project; not affiliated with NIBE/myUplink. MIT licensed.

@@ -18,5 +18,20 @@
       "title": "Add the NIBE card module to YAML dashboard resources",
       "description": "Your dashboard resources use YAML mode. Add /nibe-f750/nibe-f750-card.js as a module resource and remove the previous NIBE card resources. Storage-mode dashboards are configured automatically."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Forecast assumptions",
+        "description": "Optional hourly weather entity (blank selects SMHI automatically). These model assumptions affect recorded recommendations only; the running thermostat is unchanged. Heat-loss units: kW/K. Thermal storage: kWh/K. Compressor capacities: kW heat output, not electrical input.",
+        "data": {
+          "weather_entity": "Hourly weather entity",
+          "heat_loss_kw_per_k": "Building heat loss (kW/K)",
+          "thermal_capacity_kwh_per_k": "Building thermal storage (kWh/K)",
+          "compressor_heat_kw": "Compressor heating capacity (kW)",
+          "dhw_heat_kw": "DHW heating capacity (kW)"
+        }
+      }
+    }
   }
 }

@@ -5,9 +5,10 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.const import Platform
 from .controller import Controller, DOMAIN
+from .forecast import Predictor
 
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
-URL = '/nibe-f750/nibe-f750-card.js?v=0.15.2'
+URL = '/nibe-f750/nibe-f750-card.js?v=0.16.0'
 
 
 async def async_setup_entry(hass, entry):
@@ -39,7 +40,7 @@ async def async_setup_entry(hass, entry):
         # Frontend modules also load automatically for YAML-mode dashboards.
         from homeassistant.components import frontend
         frontend.add_extra_js_url(hass, URL)
-    controller = Controller(hass)
+    controller = Controller(hass, predictor=Predictor(hass, entry.options))
     data[entry.entry_id] = controller
     try:
         await controller.async_start()
@@ -48,7 +49,12 @@ async def async_setup_entry(hass, entry):
         await controller.async_stop()
         data.pop(entry.entry_id, None)
         raise ConfigEntryNotReady(str(err)) from err
+    entry.async_on_unload(entry.add_update_listener(async_options_updated))
     return True
+
+
+async def async_options_updated(hass, entry):
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass, entry):

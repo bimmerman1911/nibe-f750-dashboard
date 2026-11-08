@@ -221,7 +221,7 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
             return True
         hass.http = SimpleNamespace(async_register_static_paths=register)
         hass.config_entries = SimpleNamespace(async_forward_entry_setups=forward, async_unload_platforms=unload)
-        entry = SimpleNamespace(entry_id='one')
+        entry = SimpleNamespace(entry_id='one',options={},async_on_unload=lambda cb:None,add_update_listener=lambda cb:lambda:None)
         self.assertTrue(await module.async_setup_entry(hass, entry))
         self.assertEqual(len(paths),1)
         self.assertEqual(resources.items, [{'id':'new','url':module.URL,'res_type':'module'}])

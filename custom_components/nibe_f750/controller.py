@@ -14,10 +14,11 @@ DOMAIN = 'nibe_f750'
 
 
 class Controller:
-    def __init__(self, hass, clock=time.time):
+    def __init__(self, hass, clock=time.time, predictor=None):
         self.hass = hass
         self.clock = clock
         self.store = Store(hass, 1, DOMAIN + '.control')
+        self.forecast_store = Store(hass, 1, DOMAIN + '.predictions')
         self.data = {'enabled': True, 'last_cycle': 0, 'last_attempt': 0}
         self.status = 'Starting'
         self.targets = []
@@ -29,8 +30,15 @@ class Controller:
         self.unsubscribe = None
         self.last_sample = 0
         self.write_failed = False
+        self.predictor = predictor
+        self.forecast = {}
+        self.prediction_log = []
+        self.last_prediction = None
 
     async def async_start(self):
+        if self.predictor:
+            history = await self.forecast_store.async_load() or {}
+            self.prediction_log = history.get('records', [])[-192:]
         restored = await self.store.async_load()
         if restored:
             self.data.update({k: restored[k] for k in self.data if k in restored})
@@ -78,6 +86,24 @@ class Controller:
                 'unit': states[e].attributes.get('unit_of_measurement') if e in states else None,
                 'reported_at': states[e].last_reported.isoformat() if e in states else None} for e in TELEMETRY}
             self.last_sample = now
+        if self.predictor:
+            try:
+                self.forecast = await asyncio.wait_for(self.predictor.async_update(states, now), timeout=30)
+                generated = self.forecast.get('generated_at')
+                if generated is not None and generated != self.last_prediction:
+                    self.last_prediction = generated
+                    record={k:self.forecast.get(k) for k in ('generated_at','status','message','initial_room','initial_water')}
+                    steps=self.forecast.get('steps', [])
+                    record['predictions']=[{k:s[k] for k in ('end','room','water','action','hz','inline_kw')} for s in steps]
+                    record['observed']={e:states[e].state if e in states else None for e in
+                        ('sensor.ovanvaning_temperature','sensor.nedervaning_temperature','sensor.vp_priority',
+                         'sensor.vp_current_compressor_frequency','sensor.vp_power_internal_add_heat')}
+                    self.prediction_log=(self.prediction_log+[record])[-192:]
+                    await self.forecast_store.async_save({'records':self.prediction_log})
+            except Exception:
+                # Forecast/storage problems must not interrupt the running thermostat.
+                self.forecast={'status':'Forecast unavailable','message':'See integration logs.','steps':[]}
+                _LOGGER.exception('NIBE forecast evaluation failed')
         # Entity registry/restored states can outlive the YAML package. The
         # script-specific service exists only while the old writer is loaded.
         if self.hass.services.has_service('script', 'nibe_smart_control_cycle'):

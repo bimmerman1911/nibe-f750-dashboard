@@ -44,7 +44,7 @@ try {
   assert.equal(await card.locator('.badge').textContent(),'Not running');
   assert.equal(await card.getByText('Set up live trial control',{exact:true}).count(),0);
   assert.equal(await card.evaluate(c=>c._plan.steps.length),0);
-  assert.equal(await card.getByText('Demand limited by C1 · target ceiling 20 °C',{exact:true}).count(),1);
+  assert.equal(await card.getByText(/Demand limited by C1|C2 demand/i).count(),0);
   assert.equal(await card.getByRole('img').count(),2);
   assert.equal(await card.evaluate(c=>c._weather),'weather.smhi_home');
   assert.equal(await card.evaluate(c=>c._price),'sensor.nordpool_kwh_se3_sek_3_10_025');
@@ -83,6 +83,12 @@ try {
   assert.deepEqual(await page.evaluate(()=>window.controlCalls.at(-1)),['switch','turn_off',{entity_id:'switch.nibe_smart_control'}]);
   await page.evaluate(()=>{window.smartHass.states['switch.nibe_smart_control'].attributes.status='Legacy backend detected';document.querySelector('nibe-f750-smart-card').hass=window.smartHass;});
   assert.equal(await card.locator('.badge').textContent(),'Legacy backend detected');
+  await page.evaluate(()=>{
+    window.smartHass.states['sensor.nibe_heating_forecast']={state:'Recommendation available',attributes:{controller_domain:'nibe_f750',forecast:{status:'Recommendation available',message:'Build heating reserve',generated_at:Date.now()/1000,horizon_end:Date.now()/1000+86400,steps:[{room:20,water:48}],compressor_only:true,model_cost:12}}};
+    document.querySelector('nibe-f750-smart-card').hass=window.smartHass;
+  });
+  assert.equal(await card.getByText('Build heating reserve',{exact:true}).count(),1);
+  assert.equal(await card.getByText(/Demand limited by C1|C2 demand/i).count(),0);
   assert.deepEqual(errors,[]);
   console.log('PASS: Smart Control desktop/portrait, live HA discovery, read-only sources, forecast failure and cleared plans.');
 } finally {await browser.close();}
