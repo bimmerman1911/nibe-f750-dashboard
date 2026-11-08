@@ -8,6 +8,8 @@ try {
   await page.goto(`${process.env.PREVIEW_URL||'http://127.0.0.1:8080'}/demo/smart.html`);
   const card=page.locator('nibe-f750-smart-card');
   await page.waitForFunction(()=>document.querySelector('nibe-f750-smart-card')._plan?.status==='preview');
+  assert.equal(await page.evaluate(()=>!!customElements.get('nibe-f750-card')),true);
+  assert.equal(await page.evaluate(()=>performance.getEntriesByType('resource').some(r=>r.name.endsWith('/dist/nibe-f750-smart-card.js'))),false);
   assert.equal(await card.getByRole('img').count(),2);
   assert.match(await card.locator('.badge').textContent(),/Demo.*preview/);
   assert.equal(await card.getByRole('button').count(),1);

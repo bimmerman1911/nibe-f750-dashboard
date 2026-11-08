@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NIBE Smart Control · Planning preview</title><style>body{margin:0;background:#eef3f4;color:#233747;font-family:Inter,system-ui,sans-serif}main{max-width:1080px;margin:32px auto;padding:0 16px}nav{display:flex;justify-content:space-between;gap:12px;margin-bottom:18px;color:#617584;font-size:12px}a{color:#2e7960}.note{font-size:12px;line-height:1.6;color:#617584}#scenario{font:inherit;border:1px solid #cbdcde;border-radius:8px;background:#fff;padding:6px;color:#233747}</style></head><body><main><nav><span>F750 / Smart Control preview</span><a href="./">Circuit diagram ↗</a></nav><nibe-f750-smart-card></nibe-f750-smart-card><p class="note">Illustrative model and sample prices. No heat-pump commands. Scenario: <select id="scenario"><option value="warming">Warmer weather ahead</option><option value="cold">Prolonged cold spell</option></select></p></main><script type="module">
-import '../dist/nibe-f750-smart-card.js';
+import '../dist/nibe-f750-card.js';
 const model=await (await fetch('../examples/smart-control/demo-model.json')).json();
 const start=Math.floor(Date.now()/900000)*900000;
 model.dhw.draws=[{at:new Date(start+7*3600000).toISOString(),kwh:1.1}];

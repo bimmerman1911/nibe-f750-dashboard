@@ -6,16 +6,14 @@ The existing `nibe-f750-card` circuit diagram is unchanged. `nibe-f750-smart-car
 
 ## Install the new card
 
-1. Keep the existing diagram resource and card.
-2. Copy [`dist/nibe-f750-smart-card.js`](../dist/nibe-f750-smart-card.js) to `/config/www/nibe-f750-smart-card.js`.
-3. Add `/local/nibe-f750-smart-card.js?v=0.12.0` as a **JavaScript module** under Settings → Dashboards → Resources, then refresh your browser.
-4. Add a manual card:
+1. In HACS, update/redownload **NIBE F750 Dashboard**, then refresh your browser (or clear its frontend cache). Both cards are now included in the existing `nibe-f750-card.js` resource.
+2. Keep your existing diagram card. Add another manual dashboard card:
 
 ```yaml
 type: custom:nibe-f750-smart-card
 ```
 
-The current HACS manifest still downloads the original single diagram file; it does **not** automatically install the new extra JavaScript resource. Manual installation of this additional file is required for this preview.
+No second JavaScript resource is required. If you previously added `/local/nibe-f750-smart-card.js`, remove that resource to avoid loading an older separate copy. For installations without HACS, replace `/config/www/nibe-f750-card.js` with the latest [`dist/nibe-f750-card.js`](../dist/nibe-f750-card.js) and update its existing resource URL to `/local/nibe-f750-card.js?v=0.12.1`.
 
 The standalone demo is at `/demo/smart.html` when running the repository's preview server. It uses sample prices, temperatures and explicitly illustrative model parameters. It is not connected to a real heat pump.
 
@@ -65,7 +63,7 @@ Conversion: `(source_price_per_kwh + extra_per_kwh) × (1 + vat_percent / 100)`.
 - DHW is Normal from 22:00–06:00. Outside that period it changes to Economy only when price exceeds average and 1.5, daily minimum is positive, max/min is at least 1.3, and average outdoor exceeds 2°C.
 - Thermostat writes run at second 0, DHW changes at second 5, and target updates at second 15. Thus an offset can be calculated from the preceding quarter's target.
 
-These are **target-selection rules, not calibrated comfort limits**. The definitions of `sensor.thermostat_comp_c1/c2` were not supplied, so their error/integral logic and mapping from targets to heating-curve offsets remain unknown. The preview monitors current targets, offsets and existing requests when available, and never disables these automations.
+These are **target-selection rules, not calibrated comfort limits**. These refer to `sensor.thermostat_comp_c1` and `sensor.thermostat_comp_c2`, the two existing sensors read by the supplied Smart thermostat automation to decide each circuit’s heating offset. They are not new sensors you need to create for this card. Their template definitions were not supplied, so their error/integral logic and mapping from targets to heating-curve offsets remain unknown. The preview monitors current targets, offsets and existing requests when available, and never disables these automations.
 
 ## Planning model and policy
 

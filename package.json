@@ -1,11 +1,12 @@
 {
   "name": "nibe-f750-dashboard",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node tests/browser.mjs && node tests/smart.test.mjs && node tests/smart-browser.mjs",
-    "check": "node --check dist/nibe-f750-card.js && node --check dist/nibe-f750-smart-card.js",
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/build.mjs --check && node --check dist/nibe-f750-card.js && node --check dist/nibe-f750-smart-card.js",
     "preview": "python -m http.server 8080"
   }
 }

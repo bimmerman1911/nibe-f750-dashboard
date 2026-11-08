@@ -19,7 +19,7 @@ A read-only Home Assistant circuit diagram for a NIBE F750 connected through **H
 1. Set up [the built-in myUplink integration](https://www.home-assistant.io/integrations/myuplink/) under **Settings → Devices & services**. Connect your F750 to your myUplink account first. Enter OAuth credentials in Home Assistant, never in this card or the repository.
 2. Available data and writable controls depend on the equipment, firmware, API and subscription. Some entities may need enabling. myUplink normally updates every 60 seconds; this is a cloud dashboard, not real-time telemetry.
 3. Copy `dist/nibe-f750-card.js` to `/config/www/nibe-f750-card.js`.
-4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.11.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
+4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.12.1` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
 5. Add a manual dashboard card with just:
 
 ```yaml
@@ -57,7 +57,7 @@ Old `controls:` configuration is ignored; this version never writes heat pump se
 
 ## Preview and development
 
-No frontend build or runtime dependencies:
+No runtime dependencies. After editing card sources, run `npm run build` to regenerate the single HACS bundle:
 
 ```sh
 python -m http.server 8080
@@ -71,6 +71,6 @@ Browser checks: install Playwright (`npm install --no-save playwright` and `npx 
 
 A separate `custom:nibe-f750-smart-card` previews a two-zone, price/weather-aware heating and DHW plan using Home Assistant’s Nord Pool and SMHI integrations. The original diagram is unchanged. This is read-only planning; existing automations remain in charge.
 
-[Preview](docs/smart-desktop.png) · [Setup, model limits and design](docs/smart-control.md). The extra JavaScript resource currently requires manual installation; the existing HACS single-file download still serves the original diagram.
+[Preview](docs/smart-desktop.png) · [Setup, model limits and design](docs/smart-control.md). Both cards are included in the existing HACS download. Update/redownload and refresh, then add `type: custom:nibe-f750-smart-card`; no additional JavaScript resource is needed.
 
 Independent community project; not affiliated with NIBE or myUplink. MIT licensed.
