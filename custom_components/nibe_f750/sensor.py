@@ -7,7 +7,7 @@ from .entity import ControllerEntity
 
 async def async_setup_entry(hass, entry, async_add_entities):
     controller = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([ControlSensor(controller, False), ControlSensor(controller, True), ForecastSensor(controller)])
+    async_add_entities([ControlSensor(controller, False), ControlSensor(controller, True), ForecastSensor(controller), ModelSensor(controller)])
 
 
 class ControlSensor(ControllerEntity, SensorEntity):
@@ -42,3 +42,16 @@ class ForecastSensor(ControllerEntity, SensorEntity):
     def extra_state_attributes(self):
         return {'controller_domain': DOMAIN, 'forecast': self.controller.forecast,
                 'record_count':len(self.controller.prediction_log)}
+
+
+class ModelSensor(ControllerEntity, SensorEntity):
+    def __init__(self, controller):
+        super().__init__(controller, 'model', 'NIBE adaptive model')
+
+    @property
+    def native_value(self):
+        return self.controller.learner.diagnostics()['state']
+
+    @property
+    def extra_state_attributes(self):
+        return {'controller_domain': DOMAIN, **self.controller.learner.diagnostics()}

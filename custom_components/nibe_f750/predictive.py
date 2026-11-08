@@ -1,11 +1,12 @@
-"""Price/weather planning model. Recommendations never dispatch pump commands."""
+"""Receding-horizon thermal scheduling for the adaptive supervisor."""
 from datetime import datetime, timedelta
 import math
+from dataclasses import dataclass
 
 DEFAULTS = {'heat_loss_kw_per_k': .10, 'thermal_capacity_kwh_per_k': 9.,
             'compressor_heat_kw': 4.2, 'dhw_heat_kw': 3.6,
             'room_min_c': 19., 'room_max_c': 20.5, 'room_target_c': 20.,
-            'tank_min_c': 42., 'tank_max_c': 55., 'tank_target_c': 48.,
+            'tank_min_c': 42., 'tank_max_c': 52., 'tank_target_c': 48.,
             'tank_capacity_kwh_per_k': .209, 'dhw_draw_kw': .15}
 
 
@@ -66,18 +67,43 @@ def timeline(price_rows, weather, now, unit='°C'):
     return slots
 
 
-def thermal_step(room, tank, outdoor, dt, heat, water_heat, model):
+def thermal_step(room, tank, outdoor, dt, heat, water_heat, model, draw=None):
     h,c=model['heat_loss_kw_per_k'],model['thermal_capacity_kwh_per_k']
     decay=math.exp(-h/c*dt)
-    room=outdoor+(room-outdoor)*decay+heat/h*(1-decay)
-    tank += (water_heat-model['dhw_draw_kw']-.0015*(tank-20))*dt/model['tank_capacity_kwh_per_k']
+    room=outdoor+(room-outdoor)*decay+(heat+model.get('internal_gain_kw',0))/h*(1-decay)
+    demand=model['dhw_draw_kw'] if draw is None else draw
+    tank += (water_heat-demand-.0015*(tank-20))*dt/model['tank_capacity_kwh_per_k']
     return room,tank
 
 
-def plan(slots, room, tank, max_hz=84., model=None, beam=140, min_hz=20.):
+@dataclass(slots=True)
+class Node:
+    room: float
+    water: float
+    heat: float
+    mode: str
+    run: float
+    off: float
+    mode_time: float
+    cost: float
+    aux: float
+    parent: object = None
+    step: object = None
+
+
+def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
+    from .adaptive import filtered_heat
     m={**DEFAULTS, **(model or {})}
-    if any(not math.isfinite(float(v)) or float(v)<=0 for v in m.values()):
-        raise ValueError('Model assumptions must be positive finite numbers')
+    for key in DEFAULTS:
+        value=m[key]
+        if not math.isfinite(float(value)) or (value < 0 if key=='dhw_draw_kw' else value <= 0):
+            raise ValueError('Model assumptions must be finite and physically valid')
+    for key in ('internal_gain_kw','heating_lag_hours','initial_heat_kw','auxiliary_step_kw'):
+        if key in m and (not math.isfinite(float(m[key])) or (key!='internal_gain_kw' and m[key]<0)):
+            raise ValueError('Invalid adaptive model parameter')
+    profile=m.get('dhw_profile')
+    if profile is not None and (len(profile)!=24 or any(not math.isfinite(v) or v<0 for v in profile)):
+        raise ValueError('Invalid learned hot-water profile')
     if not (m['room_min_c'] <= m['room_target_c'] <= m['room_max_c'] and
             m['tank_min_c'] <= m['tank_target_c'] <= m['tank_max_c']):
         raise ValueError('Model targets are outside model bounds')
@@ -85,65 +111,80 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=140, min_hz=20.):
         return {'status':'Waiting for forecast', 'message':'At least six continuous hours of prices and weather are needed.', 'steps':[]}
     if not (5<=room<=35 and 10<=tank<=80 and 0<min_hz<=max_hz<=150):
         raise ValueError('Current model inputs are invalid')
-    def solve(auxiliary):
+    def solve(auxiliary,width):
         actions=[('off',0.,0.,0.,0.), ('heat',m['compressor_heat_kw']*max(.5,min_hz/max_hz),0.,max(min_hz,max_hz*.5),0.),
                  ('heat',m['compressor_heat_kw'],0.,max_hz,0.),('dhw',0.,m['dhw_heat_kw'],max_hz,0.)]
-        if auxiliary:
-            actions += [('heat',m['compressor_heat_kw']+1,0.,max_hz,1.),('dhw',0.,m['dhw_heat_kw']+1,max_hz,1.)]
-        states=[(room,tank,0.,0.,None,None)]
+        limit=m.get('auxiliary_limit_kw',m.get('auxiliary_step_kw',1.))
+        if auxiliary and limit>0:
+            stages=sorted({min(limit,v) for v in (.5,1.,2.,3.,4.,5.,6.5)})
+            for extra in stages:
+                actions += [('heat',m['compressor_heat_kw']+extra,0.,max_hz,extra),
+                            ('dhw',0.,m['dhw_heat_kw']+extra,max_hz,extra)]
+        initial_mode=m.get('initial_mode','off')
+        states=[Node(room,tank,m.get('initial_heat_kw',0.),initial_mode,m.get('initial_run_minutes',30.),m.get('initial_off_minutes',15.),m.get('initial_mode_minutes',15.),0.,0.)]
         for i,s in enumerate(slots):
             unique={}
             progress=(i+1)/len(slots)
-            for r,w,cost,aux,parent,step in states:
+            for prev in states:
                 for mode,qh,qw,hz,inline in actions:
-                    nr,nw=thermal_step(r,w,s['outdoor'],s['dt'],qh,qw,m)
-                    # If already outside bounds, permit recovery without worsening it.
+                    on=hz>0
+                    previous_on=prev.mode!='off'
+                    if on and not previous_on and prev.off<15-1e-6:
+                        continue
+                    if not on and previous_on and prev.run<30-1e-6:
+                        continue
+                    if mode!='off' and prev.mode!='off' and mode!=prev.mode and prev.mode_time<15-1e-6:
+                        continue
+                    stored,delivered=filtered_heat(prev.heat,qh,s['dt'],m.get('heating_lag_hours',0.))
+                    draw=profile[s.get('local_hour',0)] if profile is not None else m['dhw_draw_kw']
+                    nr,nw=thermal_step(prev.room,prev.water,s['outdoor'],s['dt'],delivered,qw,m,draw)
                     if not min(room,m['room_min_c'])-1e-7<=nr<=max(room,m['room_max_c'])+1e-7:
                         continue
                     if not min(tank,m['tank_min_c'])-1e-7<=nw<=max(tank,m['tank_max_c'])+1e-7:
                         continue
-                    bt12=55 if mode=='dhw' else 38
+                    bt12=m.get('dhw_supply_c',55) if mode=='dhw' else m.get('supply_c',38)
                     power=hz*(.0161+.000208*(bt12-45))
-                    newcost=cost+(power+inline)*s['dt']*s['price']
-                    newaux=aux+inline*s['dt']
-                    node=(nr,nw,newcost,newaux,(r,w,cost,aux,parent,step),
-                          {**s,'action':mode,'hz':hz,'inline_kw':inline,'room':nr,'water':nw,
-                           'compressor_kw':power})
-                    key=(round(nr*20),round(nw*4),mode)
+                    minutes=s['dt']*60
+                    node=Node(nr,nw,stored,mode,
+                        min(30.,prev.run+minutes) if on and previous_on else min(30.,minutes) if on else 0.,
+                        0. if on else min(15.,prev.off+minutes),
+                        min(15.,prev.mode_time+minutes) if mode==prev.mode else min(15.,minutes),
+                        prev.cost+(power+inline)*s['dt']*s['price'],prev.aux+inline*s['dt'],prev,
+                        {**s,'action':mode,'hz':hz,'inline_kw':inline,'room':nr,'water':nw,
+                         'compressor_kw':power,'delivered_heat_kw':delivered})
+                    key=(round(nr*20),round(nw*4),round(stored*2),mode,round(node.run),round(node.off),round(node.mode_time))
                     old=unique.get(key)
-                    if old is None or (newaux,newcost)<(old[3],old[2]):
+                    if old is None or (node.aux,node.cost)<(old.aux,old.cost):
                         unique[key]=node
             def rank(n):
-                deficit=max(0,m['room_target_c']-n[0])**2*40+max(0,m['tank_target_c']-n[1])**2*2
-                return (n[3], n[2]+progress**4*deficit)
-            ordered=sorted(unique.values(), key=rank)
-            # Preserve tank/room storage diversity before cost-only candidates.
+                deficit=max(0,m['room_target_c']-n.room)**2*40+max(0,m['tank_target_c']-n.water)**2*2
+                return (n.aux,n.cost+progress**4*deficit)
+            ordered=sorted(unique.values(),key=rank)
             buckets={}
             for n in ordered:
-                buckets.setdefault((int(n[0]*2),int(n[1]/2),n[5]['action']),n)
-            states=list(buckets.values())[:beam]
+                buckets.setdefault((int(n.room*2),int(n.water/2),n.mode),n)
+            states=list(buckets.values())[:width]
             ids={id(n) for n in states}
-            states += [n for n in ordered if id(n) not in ids][:beam-len(states)]
+            states += [n for n in ordered if id(n) not in ids][:width-len(states)]
             if not states:
                 return None
-        feasible=[n for n in states if n[0]>=m['room_target_c'] and n[1]>=m['tank_target_c']]
-        return min(feasible,key=lambda n:(n[3],n[2])) if feasible else None
-    best=solve(False)
-    compressor_only=best is not None
-    best=best or solve(True)
+        feasible=[n for n in states if n.room>=m['room_target_c']-1e-7 and n.water>=m['tank_target_c']-1e-7]
+        return min(feasible,key=lambda n:(n.aux,n.cost)) if feasible else None
+    best=solve(False,beam)
     if best is None:
-        return {'status':'Model cannot meet targets','message':'No schedule found within the assumed capacity and temperature limits.', 'steps':[]}
+        best=solve(False,beam*3)
+    compressor_only=best is not None
+    best=best or solve(True,beam)
+    if best is None:
+        return {'status':'No feasible schedule','message':'Using thermostat control: no schedule found within capacity and comfort limits.', 'steps':[]}
     steps=[]
     n=best
-    while n[5] is not None:
-        steps.append(n[5]);n=n[4]
+    while n.step is not None:
+        steps.append(n.step);n=n.parent
     steps.reverse()
     action=steps[0]['action']
-    recommendation={'off':'Use stored heat now','heat':'Build heating reserve','dhw':'Prepare hot water'}[action]
-    if steps[0]['inline_kw']:
-        recommendation='Extra heat in the model candidate'
-    return {'status':'Recommendation available','message':recommendation,'steps':steps,
-            'model_cost':best[2],'inline_kwh':best[3],'compressor_only':compressor_only,
+    description={'off':'Using stored heat','heat':'Building heating reserve','dhw':'Preparing hot water'}[action]
+    return {'status':'Adaptive schedule','message':description,'steps':steps,
+            'model_cost':best.cost,'inline_kwh':best.aux,'compressor_only':compressor_only,
             'model':m,'horizon_end':slots[-1]['end'],
-            'scope':'Prediction and recommendation; current thermostat remains in control.',
-            'assumptions':'Uncalibrated heat loss, storage and capacity; illustrative DHW draw allowance.'}
+            'scope':'Active supervisory control through heating targets and DHW comfort mode.'}

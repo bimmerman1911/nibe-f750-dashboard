@@ -18,7 +18,8 @@ class ControlSwitch(ControllerEntity, SwitchEntity):
 
     @property
     def extra_state_attributes(self):
-        return {'controller_domain': DOMAIN, 'status': self.controller.status, 'targets': self.controller.targets,
+        return {'controller_domain': DOMAIN, 'status': self.controller.status, 'targets': self.controller.targets,'control': self.controller.control,
+                'learning':self.controller.learner.diagnostics(),
                 'last_cycle': self.controller.data['last_cycle'],
                 'last_attempt': self.controller.data['last_attempt']}
 

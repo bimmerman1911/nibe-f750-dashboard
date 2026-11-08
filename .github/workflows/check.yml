@@ -15,6 +15,7 @@ jobs:
       - run: python tests/control_test.py
       - run: python tests/integration_test.py
       - run: python tests/predictive_test.py
+      - run: python tests/adaptive_test.py
       - run: python -m compileall -q custom_components/nibe_f750
       - run: npm run check
       - run: npm install --no-save playwright@1.56.1

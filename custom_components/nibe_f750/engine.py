@@ -37,7 +37,7 @@ def fresh(state, now):
     return reported is not None and -5 <= now - reported.timestamp() <= 1800
 
 
-def calculate(states, now, hour, persistent_shortfall=False):
+def calculate(states, now, hour, persistent_shortfall=False, control=None):
     """Return targets and at most three setting requests, or None for missing data."""
     if not all(fresh(states.get(e), now) and number(states[e].state) is not None for e in REQUIRED_READINGS):
         return None
@@ -53,6 +53,8 @@ def calculate(states, now, hour, persistent_shortfall=False):
     attrs = states[PRICE].attributes if states.get(PRICE) else {}
     target1 = 20 if (None in (p, outside, extract) or attrs.get('low_price') is True
                      or p < 1.5 or outside < 2 or extract < 18) else 19
+    if control is not None:
+        target1 = float(control['target_c'])
     target2 = min(math.ceil(r2), target1)
     e1, e2 = target1-r1, target2-r2
     next1 = current1 + (1 if e1 > .3 else -1 if e1 < -.3 else 0)
@@ -66,7 +68,8 @@ def calculate(states, now, hour, persistent_shortfall=False):
     avg, mn, mx = (number(attrs.get(k)) for k in ('average', 'min', 'max'))
     economy = (6 <= hour < 22 and None not in (p, avg, mn, mx, outside)
                and p > avg and p > 1.5 and mn > 0 and mx/mn >= 1.3 and outside > 2)
-    candidates = [(C1, next1), (C2, next2), (DHW, 'Economy' if economy else 'Normal')]
+    comfort = control['dhw'] if control is not None else 'Economy' if economy else 'Normal'
+    candidates = [(C1, next1), (C2, next2), (DHW, comfort)]
     writes = []
     for entity, proposed in candidates:
         state = states.get(entity)

@@ -37,7 +37,7 @@ class ModelTests(unittest.TestCase):
     def test_model_finds_schedule_and_preserves_end_reserve(self):
         slots=p.timeline(p.prices(rows(),'SEK/kWh'),weather(),BASE)
         result=p.plan(slots,20.1,49)
-        self.assertEqual(result['status'],'Recommendation available')
+        self.assertEqual(result['status'],'Adaptive schedule')
         self.assertTrue(result['compressor_only'])
         self.assertEqual(result['inline_kwh'],0)
         self.assertGreaterEqual(result['steps'][-1]['room'],20)
@@ -57,7 +57,7 @@ class ModelTests(unittest.TestCase):
     def test_infeasible_limits_are_explicit(self):
         slots=p.timeline(p.prices(rows(),'SEK/kWh'),[{**w,'temperature':-50} for w in weather()],BASE)
         result=p.plan(slots,19.1,43,model={'compressor_heat_kw':1,'dhw_heat_kw':1})
-        self.assertEqual(result['status'],'Model cannot meet targets')
+        self.assertEqual(result['status'],'No feasible schedule')
         self.assertEqual(result['steps'],[])
 
 class SourceTests(unittest.IsolatedAsyncioTestCase):
@@ -87,7 +87,7 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         hass,states,calls=self.make()
         predictor=f.Predictor(hass,{'weather_entity':'weather.home'})
         result=await predictor.async_update(states,BASE)
-        self.assertEqual(result['status'],'Recommendation available')
+        self.assertEqual(result['status'],'Adaptive schedule')
         self.assertTrue(result['tomorrow_unavailable'])
         self.assertEqual(calls,[('weather','get_forecasts')])
         await predictor.async_update(states,BASE+60)
@@ -118,7 +118,7 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         hass.services.async_call=call
         with patch.dict(sys.modules,{'homeassistant.helpers.entity_registry':er}), patch('homeassistant.util.dt.now',return_value=datetime.fromtimestamp(BASE,timezone.utc)):
             result=await f.Predictor(hass,{'weather_entity':'weather.home'}).async_update(states,BASE)
-        self.assertEqual(result['status'],'Recommendation available')
+        self.assertEqual(result['status'],'Adaptive schedule')
         self.assertEqual(result['steps'][0]['price'],.3)
         self.assertTrue(result['tomorrow_unavailable'])
         self.assertEqual(count,2)

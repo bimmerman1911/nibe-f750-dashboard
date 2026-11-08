@@ -34,24 +34,20 @@ The new integration detects the old registered YAML script service and **does no
 
 Standard storage-mode dashboard resources are registered automatically, including removal of this project's old `/local/` and `/hacsfiles/` card resources. For YAML-mode dashboards, the integration loads its module through HA's frontend API; remove any old NIBE resource URLs from your YAML so an outdated card is not loaded alongside it.
 
-## What runs now
+## Adaptive Smart Control (v0.17)
 
-- Bounded thermostat control: the original 19/20°C price rules; at most one offset step per cycle, with a 0.3°C deadband.
-- C2 follows `min(ceil(C2 room temperature), C1 target)`. C2 increases require satisfied C1 room demand and adequate BT61 supply relative to C1's calculated target.
-- A sustained 15-minute supply shortfall can reduce C2 one step when C2 is near its target; unknown/stale data and DHW priority prevent C2 increases.
-- Original Normal/Economy DHW rules, including Normal overnight.
-- **At most three setting attempts in a rolling 15-minute window**, unchanged values skipped. Durable reservation before dispatch, timestamps after completion, no immediate retry after failure. Other automations/NIBE app actions and myUplink internal HTTP retries are outside this controller's budget.
-- Local telemetry every five minutes in `sensor.nibe_control_telemetry`, normally retained by HA Recorder. Source report timestamps are included.
+**The learned forecast plan now changes settings automatically.** Update through Marketplace, restart HA and refresh the browser. Existing integrations and card configurations keep working. No YAML, training file, extra model service or shadow-mode activation is needed.
 
-The controller writes only the two heating offsets and DHW comfort mode. Native NIBE control owns compressor, inline-heater permission/limit, defrost and hygiene. **The new forecast backend runs automatically and records recommendations; live settings still follow the existing thermostat/DHW policy.** No calibrated COP, globally optimal cost or guaranteed inline-heater avoidance is claimed.
+- Learns cooling/heating response and heat delay from actual temperatures and heat-pump operation. Parameters persist across restarts.
+- Learns an hourly hot-water demand profile and effective tank charging response.
+- Plans heating and DHW using hourly weather and upcoming electricity prices, stored heat, available compressor capacity and estimated auxiliary need.
+- Applies the current schedule through bounded room targets, the two native heating offsets and Normal/Economy DHW mode.
+- Starts from estimates immediately and refines them while operating. It automatically falls back to the previous thermostat policy when forecasts or a feasible plan are unavailable.
+- Keeps the established write cadence: changed settings only, at most three setting attempts per rolling 15 minutes, with persisted timestamps. Native NIBE control owns actual compressor/heater operation, defrost and hygiene.
 
-Status is reported by the backend: Starting, Running, Paused, Waiting for readings, Legacy backend detected, Write failed or Controller error. Running means the control loop is active; check HA logs and actual settings to investigate rejected cloud requests.
+The card shows **Adaptive control** or **Temperature control** (fallback), the current targets, price/schedule outlook and learning progress. Circuit dependencies remain fixed internal constraints. Learning state is not an enable/disable gate.
 
-## First predictive backend (v0.16)
-
-Upcoming Nord Pool prices and hourly weather now feed a background heating/DHW planner. The card shows a Heating outlook, modelled indoor/tank ranges and price-aligned recommendations. Initial assumptions are configurable from integration options. No circuit-dependency explanations are shown in the card.
-
-Update in Marketplace, restart HA and refresh the browser. [Inputs, assumptions, logging and validation limits](docs/predictive-control.md).
+[Model, configuration, diagnostics and limitations](docs/adaptive-control.md). This is an active first adaptive supervisor; it does not claim metered COP, perfect prediction or globally optimal cost. No GPU, AI subscription or direct HA access is needed for local learning.
 
 ## Cards and calculations
 
@@ -66,6 +62,6 @@ The existing light, portrait-friendly combined refrigerant/hydraulic circuit car
 
 `npm run build` regenerates the standalone distributable and identical integration frontend. `npm run check` verifies both copies. Run `python -m http.server 8080` for `/demo/` and `/demo/smart.html`.
 
-Run `python tests/predictive_test.py` for price/weather/model/source checks and `python tests/integration_test.py` for policy/runtime tests. The archived package regression checks need PyYAML/Jinja2 (`python tests/control_test.py`). Browser checks use Playwright and a running preview server (`npm test`). CI also runs HA's hassfest validation.
+Run `python tests/adaptive_test.py` for learning and active control, `python tests/predictive_test.py` for price/weather/model/source checks and `python tests/integration_test.py` for policy/runtime tests. The archived package regression checks need PyYAML/Jinja2 (`python tests/control_test.py`). Browser checks use Playwright and a running preview server (`npm test`). CI also runs HA's hassfest validation.
 
 Validation uses deterministic HA-shaped fixtures and browsers; installation on the owner's HA instance has not been verified remotely. Independent community project; not affiliated with NIBE/myUplink. MIT licensed.

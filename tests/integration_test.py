@@ -13,14 +13,19 @@ COMPONENT = ROOT / 'custom_components/nibe_f750'
 
 class Store:
     saved = None
+    other = {}
     def __init__(self, *args):
         self.fail = False
+        self.key = args[-1]
     async def async_load(self):
-        return copy.deepcopy(Store.saved)
+        return copy.deepcopy(Store.saved if self.key.endswith('.control') else Store.other.get(self.key))
     async def async_save(self, data):
         if self.fail:
             raise OSError('Disk unavailable')
-        Store.saved = copy.deepcopy(data)
+        if self.key.endswith('.control'):
+            Store.saved = copy.deepcopy(data)
+        else:
+            Store.other[self.key] = copy.deepcopy(data)
 
 for name in ['homeassistant','homeassistant.helpers','homeassistant.helpers.event',
              'homeassistant.helpers.storage','homeassistant.util']:
@@ -71,6 +76,7 @@ class Fixture:
 class IntegrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         Store.saved = None
+        Store.other = {}
         self.hass = Fixture()
         self.controller = runtime.Controller(self.hass, clock=lambda: self.hass.time)
 
@@ -133,6 +139,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_orphan_legacy_entities_do_not_block_control(self):
         for state in ('unavailable', 'off', 'on'):
             Store.saved = None
+            Store.other = {}
             self.hass = Fixture()
             self.hass.states.values['input_boolean.nibe_smart_control_enabled'] = state
             self.hass.states.values['script.nibe_smart_control_cycle'] = state
@@ -189,7 +196,7 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
             sys.modules.setdefault(name, ModuleType(name))
         sys.modules['homeassistant.components.http'].StaticPathConfig = lambda *args: args
         sys.modules['homeassistant.exceptions'].ConfigEntryNotReady = RuntimeError
-        sys.modules['homeassistant.const'].Platform = SimpleNamespace(SENSOR='sensor', SWITCH='switch')
+        sys.modules['homeassistant.const'].Platform = SimpleNamespace(SENSOR='sensor', SWITCH='switch', BUTTON='button')
         module = ModuleType('_nibe_test.setup')
         module.__package__ = '_nibe_test'
         module.__file__ = str(COMPONENT/'__init__.py')
@@ -209,6 +216,7 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
             async def async_delete_item(self, id):
                 self.items = [i for i in self.items if i['id']!=id]
         Store.saved = None
+        Store.other = {}
         hass = Fixture()
         resources = Resources()
         hass.data = {'lovelace':SimpleNamespace(resources=resources)}
@@ -216,7 +224,7 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
         async def register(config):
             paths.extend(config)
         async def forward(entry, platforms):
-            self.assertEqual(platforms, ['sensor','switch'])
+            self.assertEqual(platforms, ['sensor','switch','button'])
         async def unload(entry, platforms):
             return True
         hass.http = SimpleNamespace(async_register_static_paths=register)

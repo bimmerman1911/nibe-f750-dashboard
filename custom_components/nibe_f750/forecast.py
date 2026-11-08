@@ -1,8 +1,9 @@
 """Read forecasts/prices through HA integrations; no credentials or pump setters."""
 from datetime import datetime, timedelta, timezone
 import asyncio
+from homeassistant.util import dt as dt_util
 from .engine import ROOM1, ROOM2, number, fresh, PRICE
-from .predictive import prices, timeline, plan
+from .predictive import prices, timeline, plan, DEFAULTS
 
 
 class Predictor:
@@ -11,6 +12,8 @@ class Predictor:
         self.options=options or {}
         self.last_refresh=None
         self.retry_after=900
+        self.adaptive_model={}
+        self.learning={}
         self.result={'status':'Waiting for forecast','message':'Loading prices and hourly weather.', 'steps':[]}
 
     async def async_update(self, states, now):
@@ -58,7 +61,6 @@ class Predictor:
                     config_id=next(iter(ids)) if len(ids)==1 else None
                 if not config_id:
                     raise ValueError('Timestamped Nord Pool prices unavailable or multiple price integrations found')
-                from homeassistant.util import dt as dt_util
                 date=dt_util.now().date()
                 async def fetch(day):
                     r=await self.hass.services.async_call('nordpool','get_prices_for_date',
@@ -83,12 +85,32 @@ class Predictor:
                 raise ValueError('Fresh reported compressor frequency limit is needed')
             minimum=states.get('sensor.vp_min_compressor_frequency')
             min_hz=number(minimum.state) if minimum and fresh(minimum,now) else 20.
-            model={k:v for k,v in self.options.items() if k!='weather_entity'}
+            model={**DEFAULTS, **{k:v for k,v in self.options.items() if k in DEFAULTS}, **self.adaptive_model}
+            local_timezone=getattr(dt_util.now(),'tzinfo',timezone.utc)
+            for slot in slots:
+                slot['local_hour']=datetime.fromtimestamp(slot['start'],local_timezone).hour
+            power_limit=states.get('select.vp_set_max_electrical_add')
+            try:
+                available=float(power_limit.state.lower().replace('kw','').strip()) if fresh(power_limit,now) else 0.
+            except (ValueError,AttributeError):
+                available=0.
+            heater_state=states.get('sensor.vp_int_elec_add_heat')
+            if heater_state and heater_state.state=='Blocked':
+                available=0.
+            model['auxiliary_limit_kw']=min(6.5,max(0.,available))
+            model['auxiliary_step_kw']=min(1.,model['auxiliary_limit_kw'])
+            priority=states.get('sensor.vp_priority')
+            running=states.get('sensor.vp_current_compressor_frequency')
+            on=running and fresh(running,now) and (number(running.state) or 0)>0
+            model['initial_mode']='dhw' if on and priority and priority.state=='Hot water' else 'heat' if on and priority and priority.state=='Heating' else 'off'
+            bt12=states.get('sensor.vp_condenser_bt12')
+            if bt12 and fresh(bt12,now) and number(bt12.state) is not None:
+                model['dhw_supply_c' if model['initial_mode']=='dhw' else 'supply_c']=float(bt12.state)
             # Pure model evaluation stays off HA's event loop.
             result=await self.hass.async_add_executor_job(lambda:plan(slots,room,tank,max_hz,model,min_hz=min_hz))
             self.result={**result,'generated_at':now,'weather_entity':weather_id,
                          'tomorrow_unavailable':unpublished,'currency':'SEK',
-                         'initial_room':room,'initial_water':tank,
+                         'initial_room':room,'initial_water':tank,'learning':self.learning,
                          'price_basis':'Source Nord Pool prices; no extra VAT/add-ons applied.'}
         except Exception as err:
             self.retry_after=120

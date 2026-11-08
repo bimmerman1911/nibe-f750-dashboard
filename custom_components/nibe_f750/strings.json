@@ -22,16 +22,25 @@
   "options": {
     "step": {
       "init": {
-        "title": "Forecast assumptions",
-        "description": "Optional hourly weather entity (blank selects SMHI automatically). These model assumptions affect recorded recommendations only; the running thermostat is unchanged. Heat-loss units: kW/K. Thermal storage: kWh/K. Compressor capacities: kW heat output, not electrical input.",
+        "title": "Adaptive control settings",
+        "description": "Learning and predictive control run automatically. Set comfort bounds and optional hourly weather entity. Heat-loss/storage/capacity values are starting estimates; existing learning is retained. Use Reset NIBE learning on the integration device to restart from those estimates.",
         "data": {
           "weather_entity": "Hourly weather entity",
           "heat_loss_kw_per_k": "Building heat loss (kW/K)",
           "thermal_capacity_kwh_per_k": "Building thermal storage (kWh/K)",
           "compressor_heat_kw": "Compressor heating capacity (kW)",
-          "dhw_heat_kw": "DHW heating capacity (kW)"
+          "dhw_heat_kw": "DHW heating capacity (kW)",
+          "room_min_c": "Minimum room temperature (\u00b0C)",
+          "room_target_c": "Normal room target (\u00b0C)",
+          "room_max_c": "Maximum preheat target (\u00b0C)",
+          "tank_min_c": "Model hot-water reserve (\u00b0C)",
+          "tank_target_c": "Model hot-water target (\u00b0C)",
+          "tank_max_c": "Model tank ceiling (\u00b0C)"
         }
       }
+    },
+    "abort": {
+      "invalid_bounds": "Minimum, target and maximum temperatures must be in that order."
     }
   }
 }

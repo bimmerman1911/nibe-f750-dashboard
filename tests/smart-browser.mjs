@@ -57,7 +57,7 @@ try {
   await card.getByText('Forecast connection lost',{exact:true}).waitFor();
   assert.equal(await card.evaluate(c=>c._plan),null);
   assert.equal(await card.getByRole('img').count(),0);
-  assert.deepEqual(await card.locator('.zone strong').allTextContents(),['— °C','— °C']);
+  assert.deepEqual(await card.locator('.zone strong').allTextContents(),['20.1 °C','20.1 °C']);
   await page.evaluate(()=>{
     const c=document.querySelector('nibe-f750-smart-card');
     window.controlCalls=[];
@@ -89,6 +89,17 @@ try {
   });
   assert.equal(await card.getByText('Build heating reserve',{exact:true}).count(),1);
   assert.equal(await card.getByText(/Demand limited by C1|C2 demand/i).count(),0);
+  await page.evaluate(()=>{
+    const s=window.smartHass.states['switch.nibe_smart_control'];
+    s.attributes.status='Running';s.attributes.control={mode:'Adaptive',reason:'Heating ahead of future demand and prices',target_c:20.4};
+    s.attributes.targets=[20.4,20.4];s.attributes.learning={state:'Learning',windows:12,observed_hours:6,response_error_c:.04};
+    document.querySelector('nibe-f750-smart-card').hass=window.smartHass;
+  });
+  assert.equal(await card.getByText('Adaptive control',{exact:true}).count(),1);
+  assert.equal(await card.getByText('Current target 20.4 °C',{exact:true}).count(),2);
+  assert.equal(await card.getByText('Heating ahead of future demand and prices',{exact:true}).count(),1);
+  assert.equal(await card.getByText(/Learning your home/).count(),1);
+  assert.equal(await card.getByText(/Recommendations are recorded for validation/).count(),0);
   assert.deepEqual(errors,[]);
   console.log('PASS: Smart Control desktop/portrait, live HA discovery, read-only sources, forecast failure and cleared plans.');
 } finally {await browser.close();}

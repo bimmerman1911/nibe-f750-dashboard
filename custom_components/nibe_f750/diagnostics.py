@@ -1,0 +1,15 @@
+"""Local model diagnostics, downloadable through HA's integration UI."""
+from .controller import DOMAIN
+
+
+async def async_get_config_entry_diagnostics(hass, entry):
+    controller = hass.data[DOMAIN][entry.entry_id]
+    return {'status':controller.status, 'control':controller.control,
+            'learning':controller.learner.diagnostics(),
+            'targets':controller.targets, 'write_timestamps':{
+                k:controller.data[k] for k in ('last_cycle','last_attempt')},
+            'forecast_summary':{k:controller.forecast.get(k) for k in
+                ('status','message','generated_at','horizon_end','initial_room','initial_water','model_cost','inline_kwh')},
+            'model_state':controller.learner.dump(),
+            'recent_decisions':controller.decision_log[-32:],
+            'current_inputs':controller.telemetry}
