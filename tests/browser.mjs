@@ -31,6 +31,20 @@ try {
   assert.equal(heatCases.off.qEvaporator,null);
   assert.equal(heatCases.energyInsteadOfPower.compressor,null);
   assert.equal(heatCases.blank.compressor,null);
+  const referenceCases=await page.evaluate(async()=>{
+    const {calculateHeat,discoverEntities}=await import('/dist/nibe-f750-card.js');
+    const entities={reference_air_flow:'sensor.vp_reference_air_speed_sensor',exhaust_air:'extract',leaving_air:'discharge',air_flow:'actual',compressor_power:'power',water_flow:'water',condenser_water_out:'out',return:'back'};
+    const state=(value,unit)=>({state:String(value),attributes:{unit_of_measurement:unit}});
+    const states={extract:state(21,'°C'),discharge:state(-3,'°C'),actual:state(180,'m³/h'),power:state(950,'W'),water:state(10,'l/min'),out:state(35,'°C'),back:state(30,'°C')};
+    const run=(value,unit)=>calculateHeat({...states,[entities.reference_air_flow]:state(value,unit)},entities);
+    const registry=[{platform:'myuplink',device_id:'pump',entity_id:entities.reference_air_flow,unique_id:'device-new-id'},{platform:'myuplink',device_id:'other',entity_id:'sensor.other_reference_air_speed_sensor',unique_id:'other-43124'}];
+    return {found:discoverEntities(registry,'pump').entities.reference_air_flow,valid:run(210,'M3/h'),litres:run(210/3.6,'l/s'),unitless:run(210,''),percent:run(60,'%'),velocity:run(2,'m/s'),negative:run(-1,'m³/h'),missing:run('unavailable','m³/h')};
+  });
+  assert.equal(referenceCases.found,'sensor.vp_reference_air_speed_sensor');
+  assert.ok(Math.abs(referenceCases.valid.qEvaporator-1.69008)<1e-10);
+  assert.equal(referenceCases.valid.evaporatorMethod,'reference-sensible');
+  assert.ok(Math.abs(referenceCases.litres.qEvaporator-referenceCases.valid.qEvaporator)<1e-10);
+  for(const key of ['unitless','percent','velocity','negative','missing']) assert.equal(referenceCases[key].evaporatorMethod,'balance',key);
   const energyCases=await page.evaluate(async()=>{
     const {powerFromEnergy,calculateHeat,discoverEntities}=await import('/dist/nibe-f750-card.js');
     const now=Date.now(),row=(seconds,value,unit='kWh')=>({s:String(value),a:{unit_of_measurement:unit},lu:(now-seconds*1000)/1000});

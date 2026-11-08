@@ -19,7 +19,7 @@ A Home Assistant custom Lovelace card for a NIBE F750 connected through **Home A
 1. Set up [the built-in myUplink integration](https://www.home-assistant.io/integrations/myuplink/) under **Settings → Devices & services**. Connect your F750 to your myUplink account first. Enter OAuth credentials in Home Assistant, never in this card or the repository.
 2. Available data and writable controls depend on the equipment, firmware, API and subscription. Some entities may need enabling. myUplink normally updates every 60 seconds; this is a cloud dashboard, not real-time telemetry.
 3. Copy `dist/nibe-f750-card.js` to `/config/www/nibe-f750-card.js`.
-4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.6.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
+4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.7.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
 5. Add a manual dashboard card with just:
 
 ```yaml
@@ -51,6 +51,7 @@ Manual mapping is an optional advanced override: providing `entities:` replaces 
 | `compressor_energy` | Optional compressor-only electrical energy counter (Wh/kWh), used with recorder history to calculate average P |
 | `water_flow`, `condenser_water_out` | BF1 condenser water flow and BT12 outlet temperature, used with BT3 return for Q |
 | `air_flow` | BS1 airflow with volume/time units, for the sensible-only evaporator estimate |
+| `reference_air_flow` | Automatically discovers `sensor.vp_reference_air_speed_sensor` and equivalents; takes precedence for a clearly labeled reference-airflow sensible evaporator Q estimate |
 
 `controls.heating` and `controls.hot_water` each accept a writable `number.*` or `select.*` entity. Choose the actual heating offset / hot water comfort setting exposed by your installation. The card calls `number.set_value` or `select.select_option`; it never commands compressor speed directly. A successful service call means the command was sent, not that the heat pump has applied it. Verify the subsequent state. myUplink may require a paid subscription for writes.
 

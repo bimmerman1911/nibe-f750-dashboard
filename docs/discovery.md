@@ -24,6 +24,7 @@ The card excludes disabled entities and other integrations, scopes every match t
 | Compressor energy | 43144 | Optional compressor-only energy; history-derived average P requires Wh/kWh, not hours or a dimensionless time factor |
 | Water flow | 40072 | BF1 EP14 flow, requires physical volume/time units |
 | Condenser water outlet | 40017 | BT12, before auxiliary heating |
+| Reference airflow | 43124 | `reference_air_speed_sensor`, reference airflow / airflow ref aliases; sensible-Q estimate requires physical volume/time units |
 | Airflow | 40050 | BS1, requires physical volume/time units (unitless readings are not assumed to be m³/h) |
 | Heating adjustment | 47011 | Heating curve offset, system 1; writable `number` only |
 | Hot water mode | 47041 | Comfort mode; writable `select` or `number` only |
