@@ -69,7 +69,7 @@ Browser checks: install Playwright (`npm install --no-save playwright` and `npx 
 
 ## New: Smart Control planning card
 
-A separate `custom:nibe-f750-smart-card` previews a two-zone, price/weather-aware heating and DHW plan using Home Assistant’s Nord Pool and SMHI integrations. The original diagram is unchanged. This is read-only planning; existing automations remain in charge.
+A separate `custom:nibe-f750-smart-card` previews a two-zone, price/weather-aware heating and DHW plan using Home Assistant’s Nord Pool and SMHI integrations. The original diagram is unchanged. This is read-only planning; existing automations remain in charge. The supplied C2 target dependency is displayed. Live two-zone schedules await a coupled hydraulic model; the fixed heat split is a demo assumption.
 
 [Preview](docs/smart-desktop.png) · [Setup, model limits and design](docs/smart-control.md). Both cards are included in the existing HACS download. Update/redownload and refresh, then add `type: custom:nibe-f750-smart-card`; no additional JavaScript resource is needed.
 

@@ -63,7 +63,15 @@ Conversion: `(source_price_per_kwh + extra_per_kwh) × (1 + vat_percent / 100)`.
 - DHW is Normal from 22:00–06:00. Outside that period it changes to Economy only when price exceeds average and 1.5, daily minimum is positive, max/min is at least 1.3, and average outdoor exceeds 2°C.
 - Thermostat writes run at second 0, DHW changes at second 5, and target updates at second 15. Thus an offset can be calculated from the preceding quarter's target.
 
-These are **target-selection rules, not calibrated comfort limits**. These refer to `sensor.thermostat_comp_c1` and `sensor.thermostat_comp_c2`, the two existing sensors read by the supplied Smart thermostat automation to decide each circuit’s heating offset. They are not new sensors you need to create for this card. Their template definitions were not supplied, so their error/integral logic and mapping from targets to heating-curve offsets remain unknown. The preview monitors current targets, offsets and existing requests when available, and never disables these automations.
+These are **target-selection rules, not calibrated comfort limits**. The owner clarified that `sensor.thermostat_comp_c1` and `sensor.thermostat_comp_c2` are helpers storing requested offsets; they are not assumed to contain thermostat formulas. No new helpers or template definitions are needed to display this card. The preview monitors current targets, applied offsets and stored requests, and never disables the automations.
+
+### C2 depends on C1
+
+C2 is the low-temperature circuit. Its demand is deliberately limited because independent control can let it consume too much of the shared heat supply. The existing rule `C2 target = min(ceil(C2 room temperature), C1 target)` is intentional demand restraint, not an accidental dependency. The live card displays this calculated ceiling alongside the actual helper target. A target ceiling alone does not specify a heat-flow limit or prove a hydraulic balance.
+
+The future controller must coordinate both circuits, preserve this demand restraint and avoid escalating compressor/inline heat to satisfy an independently boosted C2. It must also monitor both rooms for comfort; restricting C2 must not silently discard its comfort needs. Separate room-temperature requirements still matter, but the heat delivered to each circuit cannot be assumed independently available. Valve/shunt arrangement, flow response and supply/return behavior must inform the distribution model.
+
+The demo's fixed `heat_share` split cannot represent C2 dominating the supply. **Live two-zone scheduling is therefore withheld**, with prices/weather and current control values still displayed, until a coupled distribution model is implemented. The demo remains an explicitly illustrative scheduling example, not a validated model of this installation.
 
 ## Planning model and policy
 
@@ -98,7 +106,7 @@ No wind/solar model, learned thermal inertia, defrost prediction, tariff demand-
 
 ## Next step toward automatic control
 
-A persistent Home Assistant backend must own the 15-minute replanning cycle, log predictions/outcomes, support a manual override and run a shadow-validation period. It needs the two thermostat template definitions, actual source/entity capability inventory, calibrated zone/capacity parameters, confirmed comfort/DHW constraints, and a safe mapping from abstract heat demand to allowed heating offsets and comfort modes. This first card deliberately does not guess those offsets.
+A persistent Home Assistant backend must own the 15-minute replanning cycle, log predictions/outcomes, support a manual override and run a shadow-validation period. It needs the logic that updates the stored offset requests, the coupled circuit hydraulics and response, actual source/entity capability inventory, calibrated zone/capacity parameters, confirmed comfort/DHW constraints, and a safe mapping from abstract heat demand to allowed heating offsets and comfort modes. This first card deliberately does not guess those offsets.
 
 Before live writes, that backend must handle stale/unavailable data, native safety and hot-water hygiene, native degree-minute behavior, operating limits, write permissions/subscription, cloud delay, and ownership conflicts with existing automations. Native heat-pump control should remain authoritative on failures. The current preview does not disable or bypass any of those functions.
 

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {normalizePrices,normalizeForecast,buildTimeline,planHeat,fetchMarket} from '../dist/nibe-f750-smart-card.js';
+import {normalizePrices,normalizeForecast,buildTimeline,planHeat,fetchMarket,linkedCircuitTargets} from '../dist/nibe-f750-smart-card.js';
 const model=JSON.parse(fs.readFileSync(new URL('../examples/smart-control/demo-model.json',import.meta.url)));
 const base=Date.parse('2026-11-08T00:00:00Z'),iso=t=>new Date(t).toISOString();
 const initial={temps:[20.1,20.1],water:49,running:false};
@@ -88,4 +88,11 @@ test('weather and official Nord Pool use HA read actions with MWh conversion',as
 test('existing custom Nord Pool raw prices need no direct API call',async()=>{
   const hass={config:{time_zone:'Europe/Stockholm'},states:{'weather.smhi_home':{attributes:{temperature_unit:'°C'}},'sensor.nordpool':{attributes:{unit_of_measurement:'SEK/kWh',raw_today:[{start:iso(base),end:iso(base+3600000),value:1.25}],raw_tomorrow:[],tomorrow_valid:false}}},callWS:async r=>{assert.equal(r.domain,'weather');return {response:{'weather.smhi_home':{forecast:[{datetime:iso(base),temperature:0},{datetime:iso(base+3600000),temperature:1}]}}};}};
   const r=await fetchMarket(hass,{},[],'weather.smhi_home','sensor.nordpool');assert.equal(r.prices[0].price,1.25);assert.equal(r.unpublished,true);
+});
+
+test('C2 follows the supplied ceiling rule without inventing hydraulic shares',()=>{
+  assert.deepEqual(linkedCircuitTargets(20,18.2),{c1:20,c2:19});
+  assert.deepEqual(linkedCircuitTargets(19,21.5),{c1:19,c2:19});
+  assert.deepEqual(linkedCircuitTargets(20,19),{c1:20,c2:19});
+  assert.deepEqual(linkedCircuitTargets(20,null),{c1:20,c2:null});
 });

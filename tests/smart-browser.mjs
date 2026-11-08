@@ -40,8 +40,11 @@ try {
     }};
     c.hass=window.smartHass;c.setConfig({type:'custom:nibe-f750-smart-card',model:window.smartDemo.model});
   });
-  await page.waitForFunction(()=>document.querySelector('nibe-f750-smart-card')._plan?.status==='preview');
+  await page.waitForFunction(()=>document.querySelector('nibe-f750-smart-card')._plan?.status==='coupled');
   assert.match(await card.locator('.badge').textContent(),/read only/);
+  assert.equal(await card.evaluate(c=>c._plan.steps.length),0);
+  assert.equal(await card.getByText('Demand limited by C1 · target ceiling 20 °C',{exact:true}).count(),1);
+  assert.equal(await card.getByRole('img').count(),2);
   assert.equal(await card.evaluate(c=>c._weather),'weather.smhi_home');
   assert.equal(await card.evaluate(c=>c._price),'sensor.nordpool_kwh_se3_sek_3_10_025');
   assert.ok(await page.evaluate(()=>window.smartCalls.filter(r=>r.type==='call_service').every(r=>r.domain==='weather')));
