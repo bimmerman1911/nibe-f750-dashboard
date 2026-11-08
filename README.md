@@ -67,8 +67,10 @@ node --check dist/nibe-f750-card.js
 
 Browser checks: install Playwright (`npm install --no-save playwright` and `npx playwright install chromium`), then run `npm test` while the preview server is running. Checks cover portrait layout, sensor topology, heat calculations, off/zero compressor animation, air colors, shower estimates and device discovery. `PREVIEW_URL` can override the preview origin.
 
-## Smart control roadmap
+## New: Smart Control planning card
 
-See [docs/smart-control.md](docs/smart-control.md). Automated control is not implemented in this release. First collect trustworthy telemetry and establish the writable capabilities of the specific F750 installation.
+A separate `custom:nibe-f750-smart-card` previews a two-zone, price/weather-aware heating and DHW plan using Home Assistant’s Nord Pool and SMHI integrations. The original diagram is unchanged. This is read-only planning; existing automations remain in charge.
+
+[Preview](docs/smart-desktop.png) · [Setup, model limits and design](docs/smart-control.md). The extra JavaScript resource currently requires manual installation; the existing HACS single-file download still serves the original diagram.
 
 Independent community project; not affiliated with NIBE or myUplink. MIT licensed.

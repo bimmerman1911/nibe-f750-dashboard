@@ -1,12 +1,109 @@
-# Future smart control
+# Smart Control: separate planning card
 
-The built-in myUplink integration remains the transport and entity backbone. A later Home Assistant automation/integration layer can consume the same entities; this card should display its decisions rather than run a scheduler in a browser tab.
+The existing `nibe-f750-card` circuit diagram is unchanged. `nibe-f750-smart-card` is a new, **read-only planning preview** with real Home Assistant source adapters and a bounded optimizer. It does not apply offsets, change DHW comfort mode, disable the immersion heater or run when no dashboard is open. Existing automations remain in control.
 
-1. **Inventory and observation:** record available settings, update intervals, compressor frequency, auxiliary heater power, temperatures and energy. Confirm permissions and supported control semantics on the actual F750. Never assume direct compressor or heater control is exposed.
-2. **Inputs:** timestamped electricity import prices including tariff/taxes, weather forecast, indoor comfort bounds, hot-water needs and measured power/heat. Price integration and units must be explicit.
-3. **Model:** learn building heat loss and thermal inertia. Derive COP only with adequate thermal/electrical measurements and aligned time windows; distinguish compressor COP from whole-system COP including resistance heat.
-4. **Shadow mode:** propose a schedule, explain cost/comfort tradeoffs, compare predictions with actual consumption. No writes until the model is validated.
-5. **Constrained operation:** use only supported myUplink settings with bounds, dwell times, anti-cycling constraints and rate limits. Keep manufacturer protections, frost prevention, ventilation, hot-water hygiene and manual overrides authoritative. Fall back to native control on stale prices, forecasts or telemetry.
-6. **Evaluation:** track total cost, auxiliary heater energy, starts, comfort violations and forecast error against a native-control baseline. Cloud command latency must be part of the design.
+![Smart Control preview](smart-desktop.png)
 
-No optimizer, estimated savings or live control capabilities are claimed by v0.1.
+## Install the new card
+
+1. Keep the existing diagram resource and card.
+2. Copy [`dist/nibe-f750-smart-card.js`](../dist/nibe-f750-smart-card.js) to `/config/www/nibe-f750-smart-card.js`.
+3. Add `/local/nibe-f750-smart-card.js?v=0.12.0` as a **JavaScript module** under Settings → Dashboards → Resources, then refresh your browser.
+4. Add a manual card:
+
+```yaml
+type: custom:nibe-f750-smart-card
+```
+
+The current HACS manifest still downloads the original single diagram file; it does **not** automatically install the new extra JavaScript resource. Manual installation of this additional file is required for this preview.
+
+The standalone demo is at `/demo/smart.html` when running the repository's preview server. It uses sample prices, temperatures and explicitly illustrative model parameters. It is not connected to a real heat pump.
+
+## Sources: use Home Assistant integrations
+
+**Weather:** use the built-in [SMHI integration](https://www.home-assistant.io/integrations/smhi/). Add it under Settings → Devices & services → Add integration → SMHI, choosing your home location. It needs no API key. The card calls `weather.get_forecasts` with `type: hourly`; SMHI's integration supplies its cached forecast. One SMHI weather entity is automatically preferred. When there are several, choose one under Sources & assumptions.
+
+**Electricity:** the existing `sensor.nordpool_kwh_se3_sek_3_10_025` is preferred when present. If it exposes timestamped `raw_today` / `raw_tomorrow`, the card uses those lists. Numeric-only daily arrays are not assigned guessed timestamps. An explicitly false `tomorrow_valid` excludes tomorrow's rows.
+
+For the [official Nord Pool integration](https://www.home-assistant.io/integrations/nordpool/), the card can instead call [`nordpool.get_prices_for_date`](https://www.home-assistant.io/actions/nordpool.get_prices_for_date/) for the current and next calendar day. The configuration entry ID comes from the selected entity registry row or explicit `nordpool_entry`. The action response uses currency/MWh, converted once to currency/kWh. Already-normalized custom-integration kWh values are not divided again. Nord Pool credentials are neither extracted nor sent to the browser.
+
+The defaults SE3 and SEK reflect the entity supplied in this conversation. Override them for a different region/currency. Tomorrow's prices are used only when returned; service failures leave tomorrow unavailable, rather than filling in an assumed price.
+
+Source options, if automatic selection is ambiguous:
+
+```yaml
+type: custom:nibe-f750-smart-card
+weather_entity: weather.smhi_home
+price_entity: sensor.nordpool_kwh_se3_sek_3_10_025
+area: SE3
+currency: SEK
+horizon_hours: 24
+# Optional for official Nord Pool when no price entity is available:
+# nordpool_entry: YOUR_ENTRY_ID
+# Optional if the price entity has an ambiguous unit:
+# price_unit: SEK/kWh
+```
+
+All service calls are fixed to forecast/price retrieval. There are no calls to `number.set_value`, `select.select_option`, input helpers or myUplink setters.
+
+## Tariff basis
+
+Nord Pool base prices exclude VAT and supplier/network add-ons. Existing custom Nord Pool sensors may already include these. Do not add them twice. The displayed cost is a model cost on the explicitly configured basis, not a bill estimate or a claimed saving.
+
+```yaml
+tariff:
+  vat_percent: 0
+  extra_per_kwh: 0
+```
+
+Conversion: `(source_price_per_kwh + extra_per_kwh) × (1 + vat_percent / 100)`. Defaults preserve the source basis. Supported units: the selected currency/kWh or currency/MWh, and öre/kWh for SEK. Unsupported units require an explicit `price_unit`. Negative prices are valid; no price ratio or division by a daily minimum is used. Fixed monthly fees and demand-based tariffs are not optimized.
+
+## Existing control captured from the supplied automations
+
+- Every quarter-hour, the thermostat automation writes `sensor.thermostat_comp_c1/c2`, rounded to whole numbers, to the two `number.vp_heating_offset_climate_system_*` entities.
+- Climate 1's target is 20°C for low prices, prices below 1.5, extract air below 18°C, or average outdoor below 2°C; otherwise it is 19°C. Climate 2's target is the smaller of the rounded-up upstairs temperature and climate 1's target.
+- DHW is Normal from 22:00–06:00. Outside that period it changes to Economy only when price exceeds average and 1.5, daily minimum is positive, max/min is at least 1.3, and average outdoor exceeds 2°C.
+- Thermostat writes run at second 0, DHW changes at second 5, and target updates at second 15. Thus an offset can be calculated from the preceding quarter's target.
+
+These are **target-selection rules, not calibrated comfort limits**. The definitions of `sensor.thermostat_comp_c1/c2` were not supplied, so their error/integral logic and mapping from targets to heating-curve offsets remain unknown. The preview monitors current targets, offsets and existing requests when available, and never disables these automations.
+
+## Planning model and policy
+
+The engine uses a one- or two-zone heat-loss/storage model and one mixed hot-water storage model. Price rows are split at actual quarter-hour boundaries, including a partial first interval; durations are integrated in hours. UTC timestamps with explicit offsets preserve DST days and both hourly and quarter-hour markets. Missing price/weather intervals stop the continuous horizon. By default fewer than six known hours block a plan. The requested horizon is 24 hours; unknown tomorrow prices are never extrapolated.
+
+For each zone: `C × dT/dt = Q_zone + internal_gain − H × (T_room − T_outdoor)`. This is integrated as a constant-input first-order thermal model over each interval. Heating output is divided by configured zone shares. SMHI outdoor temperature changes building heat demand. The F750's source is indoor exhaust air, so outdoor temperature is **not** used as an outdoor-source COP multiplier.
+
+Compressor choices are off, low/high space heating and high DHW. Space heating and tank charging share the same compressor capacity; they are not allocated simultaneously. Heat-output capacities are explicit model parameters. Compressor electrical input uses the owner-supplied formula `f × [0.0161 + 0.000208 × (BT12 − 45)]`, with separate assumed water-outlet temperatures for heating/DHW. The previous diagram's sensible-only Q estimate is **not** silently treated as validated total heating capacity or COP.
+
+The search respects both zone temperature bands, tank reserve, declared draw events, capacity limits and minimum on/off/mode dwell times. The terminal state must restore both zone targets and the tank target, avoiding an artificially cheap plan that drains reserves at the horizon boundary. Hot-water draw energy is subtracted before reheat in its interval, so the model cannot hide a reserve violation by reheating later in the same interval.
+
+1. Search for a feasible **compressor-only** schedule and minimize electricity cost within it.
+2. If none is found, widen that search before trying inline-heat candidates.
+3. In the inline search, prioritize less auxiliary energy, then cost. Inline candidates respect the configured step size and the common heating/DHW destination.
+4. If no candidate meets bounds, show an explicit infeasible status rather than relaxing comfort silently.
+
+This is a **bounded beam search**, not a certified global optimum or proof that inline heat is physically unavoidable. It uses 0.05°C / 0.25°C state buckets for zone/tank deduplication, retains diverse storage states, and has a finite beam budget. Models, temperature/flow sensors, the empirical power curve and demand forecasts all have error. A result described as an inline candidate is for review, not an instruction to enable resistance heating.
+
+## Model setup and current limits
+
+Without `model:`, the live card can display prices/weather but does not invent a building model or generate a schedule. Current weather is used to bridge to the first forecast point only when the first point is within 90 minutes. Large forecast gaps and missing current temperatures block planning. The card automatically reads room BT50 for climate 1 when available, the supplied `sensor.ovanvaning_temperature` for climate 2, and average BT6/BT7 for the tank. Optional `temperature_entity` per zone overrides room selection. Extract-air temperature is not silently treated as a room-temperature comfort sensor.
+
+[`examples/smart-control/demo-model.json`](../examples/smart-control/demo-model.json) contains a complete **illustrative, uncalibrated** model for reproducing the demo. Copying it to a live card only produces a trial simulation; it does not establish valid comfort or hot-water limits for the installation. All model numbers must be numeric YAML values.
+
+Model fields:
+
+- `zones`: one/two entries with `name`, optional `temperature_entity`, `loss_kw_per_k`, `capacity_kwh_per_k`, `min_c`, `max_c`, `target_c`, `heat_share`, and optional `internal_gain_kw`.
+- `dhw`: `capacity_kwh_per_k`, `loss_kw_per_k`, `ambient_c`, `min_c`, `max_c`, `target_c`, plus optional `draws: [{at: ISO_TIMESTAMP_WITH_OFFSET, kwh: ENERGY}]`.
+- Plant: `heat_low_kw`, `heat_high_kw`, `dhw_high_kw`, `low_hz`, `high_hz`, `supply_c`, `dhw_supply_c`, `inline_step_kw`, `min_on_minutes`, `min_off_minutes`, `min_mode_minutes`, and optional `min_horizon_hours` (default 6).
+
+No wind/solar model, learned thermal inertia, defrost prediction, tariff demand-charge optimization or automatic fitting is claimed yet. The mixed-tank model does not resolve stratification or guarantee shower duration. Sensor freshness cannot be certified from frontend state timestamps alone. Live acquisition and planning are tested with Home Assistant-shaped fixtures, not against the owner's installation. Source calls refresh at most every 15 minutes while this card is open; failures clear the old plan.
+
+## Next step toward automatic control
+
+A persistent Home Assistant backend must own the 15-minute replanning cycle, log predictions/outcomes, support a manual override and run a shadow-validation period. It needs the two thermostat template definitions, actual source/entity capability inventory, calibrated zone/capacity parameters, confirmed comfort/DHW constraints, and a safe mapping from abstract heat demand to allowed heating offsets and comfort modes. This first card deliberately does not guess those offsets.
+
+Before live writes, that backend must handle stale/unavailable data, native safety and hot-water hygiene, native degree-minute behavior, operating limits, write permissions/subscription, cloud delay, and ownership conflicts with existing automations. Native heat-pump control should remain authoritative on failures. The current preview does not disable or bypass any of those functions.
+
+## Validation
+
+`npm test` includes the original diagram checks plus planner/source/UI checks for unit conversion, negative prices, DST timestamps, gaps, shared capacity, cold/warm demand, tank draws, terminal reserves, inline support, infeasibility, source errors, desktop/portrait rendering and absence of control writes.

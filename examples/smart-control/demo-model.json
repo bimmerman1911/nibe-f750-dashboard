@@ -1,0 +1,8 @@
+{
+  "zones": [
+    {"name":"Climate 1","loss_kw_per_k":0.06,"capacity_kwh_per_k":5,"min_c":19,"max_c":20.8,"target_c":20,"heat_share":0.6},
+    {"name":"Climate 2","loss_kw_per_k":0.04,"capacity_kwh_per_k":4,"min_c":19,"max_c":20.8,"target_c":20,"heat_share":0.4}
+  ],
+  "dhw":{"capacity_kwh_per_k":0.209,"loss_kw_per_k":0.0015,"ambient_c":20,"min_c":42,"max_c":55,"target_c":48,"draws":[]},
+  "heat_low_kw":2.1,"heat_high_kw":4.2,"dhw_high_kw":3.6,"low_hz":50,"high_hz":100,"supply_c":38,"dhw_supply_c":55,"inline_step_kw":1,"min_on_minutes":30,"min_off_minutes":15,"min_mode_minutes":15,"min_horizon_hours":6
+}

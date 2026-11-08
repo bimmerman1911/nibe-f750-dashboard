@@ -1,0 +1,54 @@
+import {createRequire} from 'node:module';
+import assert from 'node:assert/strict';
+const {chromium}=createRequire(import.meta.url)('playwright');
+const browser=await chromium.launch({headless:true,args:['--no-sandbox'],...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
+try {
+  const page=await browser.newPage({viewport:{width:1280,height:1200}}),errors=[];
+  page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(`${process.env.PREVIEW_URL||'http://127.0.0.1:8080'}/demo/smart.html`);
+  const card=page.locator('nibe-f750-smart-card');
+  await page.waitForFunction(()=>document.querySelector('nibe-f750-smart-card')._plan?.status==='preview');
+  assert.equal(await card.getByRole('img').count(),2);
+  assert.match(await card.locator('.badge').textContent(),/Demo.*preview/);
+  assert.equal(await card.getByRole('button').count(),1);
+  assert.equal(await card.getByRole('button').textContent(),'Refresh');
+  assert.equal(await card.evaluate(c=>c._plan.auxiliary_kwh),0);
+  await page.screenshot({path:'docs/smart-desktop.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  await page.waitForFunction(()=>document.querySelector('nibe-f750-smart-card').shadowRoot.querySelector('svg').viewBox.baseVal.width===320);
+  await card.getByRole('button',{name:'Refresh'}).scrollIntoViewIfNeeded();
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  await page.screenshot({path:'docs/smart-mobile.png',fullPage:true});
+  await page.locator('#scenario').selectOption('cold');
+  await page.waitForFunction(()=>document.querySelector('nibe-f750-smart-card')._plan?.status);
+  await page.evaluate(()=>{
+    const c=document.querySelector('nibe-f750-smart-card'),start=Math.floor(Date.now()/900000)*900000;
+    const state=(value,unit)=>({state:String(value),attributes:{unit_of_measurement:unit}});
+    window.smartCalls=[];
+    const registry=[['sensor.room','40033'],['sensor.tank_top','40013'],['sensor.tank_control','40014'],['sensor.frequency','43136']].map(([entity_id,id])=>({entity_id,platform:'myuplink',device_id:'pump',unique_id:`pump-${id}`}));
+    registry.push({entity_id:'weather.smhi_home',platform:'smhi'},{entity_id:'sensor.nordpool_kwh_se3_sek_3_10_025',platform:'nordpool',config_entry_id:'pool'});
+    const prices=Array.from({length:80},(_,i)=>({start:new Date(start+i*900000).toISOString(),end:new Date(start+(i+1)*900000).toISOString(),value:i<20?.4:1.3}));
+    const weather=Array.from({length:26},(_,i)=>({datetime:new Date(start-3600000+i*3600000).toISOString(),temperature:2+i*.1}));
+    window.smartHass={config:{time_zone:'Europe/Stockholm'},states:{'weather.smhi_home':{state:'cloudy',attributes:{temperature_unit:'°C',temperature:2}},'sensor.nordpool_kwh_se3_sek_3_10_025':{state:'.4',attributes:{unit_of_measurement:'SEK/kWh',raw_today:prices,tomorrow_valid:false}},'sensor.room':state(20.1,'°C'),'sensor.ovanvaning_temperature':state(20.1,'°C'),'sensor.tank_top':state(49,'°C'),'sensor.tank_control':state(49,'°C'),'sensor.frequency':state(0,'Hz'),'input_number.set_temp_c1':state(20,'°C'),'input_number.set_temp_c2':state(20,'°C'),'number.vp_heating_offset_climate_system_1':state(1,''),'number.vp_heating_offset_climate_system_2':state(0,'')},callWS:async request=>{
+      window.smartCalls.push(request);
+      if(request.type==='config/entity_registry/list')return registry;
+      if(request.type==='config/device_registry/list')return [{id:'pump',name:'F750',model:'F750'}];
+      if(request.type==='call_service'&&request.domain==='weather'&&request.service==='get_forecasts')return {response:{'weather.smhi_home':{forecast:weather}}};
+      throw Error('Unexpected service or data request');
+    }};
+    c.hass=window.smartHass;c.setConfig({type:'custom:nibe-f750-smart-card',model:window.smartDemo.model});
+  });
+  await page.waitForFunction(()=>document.querySelector('nibe-f750-smart-card')._plan?.status==='preview');
+  assert.match(await card.locator('.badge').textContent(),/read only/);
+  assert.equal(await card.evaluate(c=>c._weather),'weather.smhi_home');
+  assert.equal(await card.evaluate(c=>c._price),'sensor.nordpool_kwh_se3_sek_3_10_025');
+  assert.ok(await page.evaluate(()=>window.smartCalls.filter(r=>r.type==='call_service').every(r=>r.domain==='weather')));
+  await page.evaluate(()=>{window.smartHass.callWS=async()=>{throw Error('Forecast connection lost');};});
+  await card.getByRole('button',{name:'Refresh'}).click();
+  await card.getByText('Forecast connection lost',{exact:true}).waitFor();
+  assert.equal(await card.evaluate(c=>c._plan),null);
+  assert.equal(await card.getByRole('img').count(),0);
+  assert.deepEqual(await card.locator('.zone strong').allTextContents(),['— °C','— °C']);
+  assert.deepEqual(errors,[]);
+  console.log('PASS: Smart Control desktop/portrait, live HA discovery, read-only sources, forecast failure and cleared plans.');
+} finally {await browser.close();}
