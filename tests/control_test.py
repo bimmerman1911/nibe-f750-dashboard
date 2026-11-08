@@ -120,6 +120,9 @@ class Fixture:
                 data = self.render(step.get('data', {}), ctx)
                 if action == 'input_datetime.set_datetime':
                     self.states[entity] = str(math.floor(float(data['timestamp'])))
+                elif action == 'input_boolean.turn_on':
+                    for item in entity if isinstance(entity, list) else [entity]:
+                        self.states[item] = 'on'
                 elif action.startswith('input_number.'):
                     self.states[entity] = str(data['value'])
                 else:
@@ -255,14 +258,14 @@ class TrialTests(unittest.TestCase):
 
     def test_shortfall_template_and_telemetry(self):
         f = Fixture()
-        guard = PACKAGE['template'][0]['binary_sensor'][0]
+        guard = next(b['binary_sensor'][0] for b in PACKAGE['template'] if 'binary_sensor' in b)
         self.assertEqual(guard['delay_on'], '00:15:00')
         self.assertFalse(f.render(guard['state'], {}))
         f.states['sensor.vp_supply_line_bt61'] = '31'
         self.assertTrue(f.render(guard['state'], {}))
         f.states['sensor.vp_priority'] = 'Hot water'
         self.assertFalse(f.render(guard['state'], {}))
-        telemetry = PACKAGE['template'][1]['sensor'][0]['attributes']['readings']
+        telemetry = next(e['attributes']['readings'] for b in PACKAGE['template'] for e in b.get('sensor', []) if e['unique_id'] == 'nibe_control_telemetry')
         readings = f.render(telemetry, {})
         self.assertEqual(readings['sensor.vp_supply_line_bt61']['value'], '31')
         self.assertEqual(readings['sensor.vp_hot_water_top_bt7']['value'], 'unknown')
@@ -273,6 +276,31 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(f.cycle()['next_dhw'], 'Economy')
         f.time += 11 * 3600
         self.assertEqual(f.cycle()['next_dhw'], 'Normal')
+
+    def test_status_reports_real_cycle_health(self):
+        f = Fixture()
+        template = PACKAGE['template'][0]['sensor'][0]['state']
+        self.assertEqual(f.render(template, {}), 'Waiting for first cycle')
+        f.cycle()
+        self.assertEqual(f.render(template, {}), 'Running')
+        f.time += 1201
+        self.assertEqual(f.render(template, {}), 'Controller not responding')
+        f.states['sensor.ovanvaning_temperature'] = 'unavailable'
+        self.assertEqual(f.render(template, {}), 'Waiting for readings')
+        f.states[READY] = 'off'
+        self.assertEqual(f.render(template, {}), 'Starting')
+        f.states[ENABLED] = 'off'
+        self.assertEqual(f.render(template, {}), 'Paused')
+
+    def test_default_enable_once_preserves_later_pause(self):
+        f = Fixture()
+        f.states[ENABLED] = 'off'
+        initialize = PACKAGE['automation'][0]['actions'][:1]
+        f.execute(initialize, {})
+        self.assertEqual(f.states[ENABLED], 'on')
+        f.states[ENABLED] = 'off'
+        f.execute(initialize, {})
+        self.assertEqual(f.states[ENABLED], 'off')
 
     def test_serialization_and_restoration_configuration(self):
         self.assertEqual(PACKAGE['script']['nibe_smart_control_cycle']['mode'], 'single')

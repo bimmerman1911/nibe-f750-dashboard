@@ -1,8 +1,8 @@
 # Smart Control: separate planning card
 
-For the new opt-in live backend, see [live trial setup and write limits](live-control.md). The trial uses current temperatures and price rules; the forecast planner below does not issue live commands.
+For the new live backend, see [live control setup and write limits](live-control.md). The control uses current temperatures and price rules; the forecast planner below does not issue live commands.
 
-The existing `nibe-f750-card` circuit diagram is unchanged. `nibe-f750-smart-card` includes a **read-only planning preview** with Home Assistant source adapters and a bounded optimizer, plus Start/Pause for the separately installed live trial backend. The forecast planner itself does not apply offsets or change DHW mode. The backend runs with dashboards closed and requires disabling the old automations as described in the live trial guide.
+The existing `nibe-f750-card` circuit diagram is unchanged. `nibe-f750-smart-card` includes a **read-only planning preview** with Home Assistant source adapters and a bounded optimizer, plus Pause/Resume for the separately installed control backend. The forecast planner itself does not apply offsets or change DHW mode. The backend runs with dashboards closed and requires disabling the old automations as described in the live control guide.
 
 ![Smart Control preview](smart-desktop.png)
 
@@ -44,7 +44,7 @@ horizon_hours: 24
 # price_unit: SEK/kWh
 ```
 
-The browser retrieves forecasts/prices and can toggle the backend enable helper using Start/Pause. It never directly writes myUplink settings. The optional backend owns the bounded cloud writes.
+The browser retrieves forecasts/prices and can toggle the backend enable helper using Pause/Resume. It never directly writes myUplink settings. The optional backend owns the bounded cloud writes.
 
 ## Tariff basis
 
@@ -75,7 +75,7 @@ The existing rule `C2 target = min(ceil(C2 room temperature), C1 target)` is int
 
 The future controller must coordinate both circuits, preserve this demand restraint and avoid escalating compressor/inline heat to satisfy an independently boosted C2. Protect the supply temperature required by C1's radiators when admitting additional C2 demand. A persistent supply-temperature shortfall should prompt a review/restriction of C2 demand before being attributed to insufficient heat-pump capacity. The supply target, measurements, margins and response delays need validation; neither an arbitrary temperature threshold nor an unverified direct shunt/pump command is implied here. During DHW priority or other native operating transitions, a temporary heating-supply drop must not be treated as evidence of C2 taking too much heat.
 
-The controller must also monitor both rooms for comfort; restricting C2 must not silently discard its comfort needs. If C2 approaches its comfort floor while C1's supply cannot be maintained, report a capacity/distribution conflict and replan the common heat supply rather than quietly overriding the dependency. Separate room-temperature requirements still matter, but the heat delivered to each circuit cannot be assumed independently available. Shunt behavior, flow response and supply/return behavior must inform the distribution model. The linked-target rule is already represented in the card; the trial backend now adds a supply-shortfall guard (see the live guide), while the predictive physical distribution model remains to be implemented.
+The controller must also monitor both rooms for comfort; restricting C2 must not silently discard its comfort needs. If C2 approaches its comfort floor while C1's supply cannot be maintained, report a capacity/distribution conflict and replan the common heat supply rather than quietly overriding the dependency. Separate room-temperature requirements still matter, but the heat delivered to each circuit cannot be assumed independently available. Shunt behavior, flow response and supply/return behavior must inform the distribution model. The linked-target rule is already represented in the card; the control backend now adds a supply-shortfall guard (see the live guide), while the predictive physical distribution model remains to be implemented.
 
 The demo's fixed `heat_share` split cannot represent C2 dominating the supply. **Live two-zone scheduling is therefore withheld**, with prices/weather and current control values still displayed, until a coupled distribution model is implemented. The demo remains an explicitly illustrative scheduling example, not a validated model of this installation.
 
@@ -100,7 +100,7 @@ This is a **bounded beam search**, not a certified global optimum or proof that 
 
 Without `model:`, the live card can display prices/weather but does not invent a building model or generate a schedule. Current weather is used to bridge to the first forecast point only when the first point is within 90 minutes. Large forecast gaps and missing current temperatures block planning. The card automatically reads the newly confirmed `sensor.ovanvaning_temperature` for climate 1 and `sensor.nedervaning_temperature` for climate 2, and average BT6/BT7 for the tank. Optional `temperature_entity` per zone overrides room selection. Extract-air temperature is not silently treated as a room-temperature comfort sensor.
 
-[`examples/smart-control/demo-model.json`](../examples/smart-control/demo-model.json) contains a complete **illustrative, uncalibrated** model for reproducing the demo. Copying it to a live card only produces a trial simulation; it does not establish valid comfort or hot-water limits for the installation. All model numbers must be numeric YAML values.
+[`examples/smart-control/demo-model.json`](../examples/smart-control/demo-model.json) contains a complete **illustrative, uncalibrated** model for reproducing the demo. Copying it to a live card only produces a control simulation; it does not establish valid comfort or hot-water limits for the installation. All model numbers must be numeric YAML values.
 
 Model fields:
 
@@ -112,7 +112,7 @@ No wind/solar model, learned thermal inertia, defrost prediction, tariff demand-
 
 ## Next step toward automatic control
 
-The live trial backend now owns serialized thermostat/DHW writes. Before allowing the forecast planner to drive those writes, a persistent predictive backend must own the replanning cycle, log predictions/outcomes, support a manual override and run a shadow-validation period. It needs the logic that updates the stored offset requests, the coupled circuit hydraulics and response, actual source/entity capability inventory, calibrated zone/capacity parameters, confirmed comfort/DHW constraints, and a safe mapping from abstract heat demand to allowed heating offsets and comfort modes. This first card deliberately does not guess those offsets.
+The control backend now owns serialized thermostat/DHW writes. Before allowing the forecast planner to drive those writes, a persistent predictive backend must own the replanning cycle, log predictions/outcomes, support a manual override and run a shadow-validation period. It needs the logic that updates the stored offset requests, the coupled circuit hydraulics and response, actual source/entity capability inventory, calibrated zone/capacity parameters, confirmed comfort/DHW constraints, and a safe mapping from abstract heat demand to allowed heating offsets and comfort modes. This first card deliberately does not guess those offsets.
 
 Before forecast-driven writes, that predictive backend must handle stale/unavailable data, native safety and hot-water hygiene, native degree-minute behavior, operating limits, write permissions/subscription, cloud delay, and ownership conflicts with existing automations. Native heat-pump control should remain authoritative on failures. The current preview does not disable or bypass any of those functions.
 

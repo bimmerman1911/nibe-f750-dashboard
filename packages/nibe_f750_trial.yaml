@@ -1,6 +1,8 @@
 # Install in /config/packages and restart HA. See docs/live-control.md.
 # A native HA backend; the dashboard never writes to myUplink directly.
 input_boolean:
+  nibe_smart_control_configured:
+    name: NIBE controller initialized
   nibe_smart_control_enabled:
     name: NIBE Smart Control
     icon: mdi:heat-pump
@@ -18,6 +20,26 @@ input_datetime:
     has_time: true
 
 template:
+  - sensor:
+      - name: NIBE Smart Control status
+        unique_id: nibe_smart_control_status
+        state: >-
+          {% set ns = namespace(valid=true) %}
+          {% for e in ['sensor.ovanvaning_temperature', 'sensor.nedervaning_temperature',
+            'number.vp_heating_offset_climate_system_1', 'number.vp_heating_offset_climate_system_2'] %}
+            {% if not is_number(states(e)) or state_attr(e, 'restored') == true or
+              as_timestamp(now()) - as_timestamp(states[e].last_reported, 0) > 1800 %}
+              {% set ns.valid = false %}
+            {% endif %}
+          {% endfor %}
+          {% set cycle = as_timestamp(states('input_datetime.nibe_smart_control_last_cycle'), 0) %}
+          {% if not is_state('input_boolean.nibe_smart_control_enabled', 'on') %}Paused
+          {% elif not is_state('input_boolean.nibe_smart_control_ready', 'on') %}Starting
+          {% elif not ns.valid or not (5 <= states('sensor.ovanvaning_temperature')|float(0) <= 35)
+             or not (5 <= states('sensor.nedervaning_temperature')|float(0) <= 35) %}Waiting for readings
+          {% elif cycle == 0 %}Waiting for first cycle
+          {% elif as_timestamp(now()) - cycle > 1200 %}Controller not responding
+          {% else %}Running{% endif %}
   - binary_sensor:
       - name: NIBE C1 supply shortfall
         unique_id: nibe_c1_supply_shortfall
@@ -77,12 +99,20 @@ automation:
       - trigger: homeassistant
         event: start
     actions:
+      # Enable automatically on first install/update; subsequent pauses restore.
+      - if: "{{ not is_state('input_boolean.nibe_smart_control_configured', 'on') }}"
+        then:
+          - action: input_boolean.turn_on
+            target:
+              entity_id:
+                - input_boolean.nibe_smart_control_enabled
+                - input_boolean.nibe_smart_control_configured
       - delay: "00:15:00"
       - action: input_boolean.turn_on
         target:
           entity_id: input_boolean.nibe_smart_control_ready
   - id: nibe_smart_control_tick
-    alias: NIBE Smart Control trial
+    alias: NIBE Smart Control
     mode: single
     triggers:
       - trigger: time_pattern
@@ -99,7 +129,7 @@ automation:
 
 script:
   nibe_smart_control_cycle:
-    alias: NIBE bounded trial cycle
+    alias: NIBE control cycle
     mode: single
     max_exceeded: silent
     sequence:
@@ -168,7 +198,7 @@ script:
               and p|float(0) > 1.5 and mn|float(0) > 0
               and mx|float(0) / mn|float(1) >= 1.30 and outside|float(0) > 2 %}
             {{ 'Economy' if economy else 'Normal' }}
-      # Unknown room/offset states stop this trial; do not use float(0) as live data.
+      # Unknown room/offset states stop control; do not use float(0) as live data.
       - condition: template
         value_template: >-
           {{ is_number(room_c1) and is_number(room_c2) and is_number(current_c1) and is_number(current_c2)

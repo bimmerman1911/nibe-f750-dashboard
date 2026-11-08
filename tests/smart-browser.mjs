@@ -41,7 +41,8 @@ try {
     c.hass=window.smartHass;c.setConfig({type:'custom:nibe-f750-smart-card',model:window.smartDemo.model});
   });
   await page.waitForFunction(()=>document.querySelector('nibe-f750-smart-card')._plan?.status==='coupled');
-  assert.match(await card.locator('.badge').textContent(),/read only/);
+  assert.equal(await card.locator('.badge').textContent(),'Not running');
+  assert.equal(await card.getByText('Set up live trial control',{exact:true}).count(),0);
   assert.equal(await card.evaluate(c=>c._plan.steps.length),0);
   assert.equal(await card.getByText('Demand limited by C1 · target ceiling 20 °C',{exact:true}).count(),1);
   assert.equal(await card.getByRole('img').count(),2);
@@ -64,9 +65,13 @@ try {
     window.smartHass.states['input_boolean.nibe_smart_control_enabled']={state:'off',attributes:{}};
     c.hass=window.smartHass;c.render();
   });
-  await card.getByRole('button',{name:'Start trial'}).click();
+  await card.getByRole('button',{name:'Resume control'}).click();
   assert.deepEqual(await page.evaluate(()=>window.controlCalls),[['input_boolean','turn_on',{entity_id:'input_boolean.nibe_smart_control_enabled'}]]);
-  await page.evaluate(()=>{const c=document.querySelector('nibe-f750-smart-card');window.smartHass.states['input_boolean.nibe_smart_control_enabled']={state:'on',attributes:{}};c.hass=window.smartHass;c.render();});
+  await page.evaluate(()=>{const c=document.querySelector('nibe-f750-smart-card');window.smartHass.states['input_boolean.nibe_smart_control_enabled']={state:'on',attributes:{}};window.smartHass.states['sensor.nibe_smart_control_status']={state:'Starting',attributes:{}};c.hass=window.smartHass;c.render();});
+  assert.equal(await card.locator('.badge').textContent(),'Starting');
+  await page.evaluate(()=>{window.smartHass.states['sensor.nibe_smart_control_status']={state:'Running',attributes:{}};document.querySelector('nibe-f750-smart-card').hass=window.smartHass;});
+  assert.equal(await card.locator('.badge').textContent(),'Running');
+  assert.equal(await card.getByText(/trial/i).count(),0);
   await card.getByRole('button',{name:'Pause control'}).click();
   assert.equal(await page.evaluate(()=>window.controlCalls[1][1]),'turn_off');
   assert.deepEqual(errors,[]);
