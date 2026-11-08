@@ -41,7 +41,9 @@ def request(forecast, states, now, model):
     desired=target
     reason='Optimising heating offset from prices, weather and delayed heat response'
     charging=states.get('sensor.vp_priority')
-    decision=policy(tank,bool(charging and charging.state=='Hot water'),current.get('dhw_mode')=='Normal' if 'dhw_mode' in current else current['action']=='dhw',now,model)
+    frequency=states.get('sensor.vp_current_compressor_frequency')
+    charging_now=bool(fresh(charging,now) and charging.state=='Hot water' and fresh(frequency,now) and (number(frequency.state) or 0)>0)
+    decision=policy(tank,charging_now,current.get('dhw_mode')=='Normal' if 'dhw_mode' in current else current['action']=='dhw',now,model)
     if decision['dhw']=='Normal':
         reason=decision['dhw_reason']
     return {'offset_c1':offset,'target_c':round(desired,2),**decision,'action':current['action'],

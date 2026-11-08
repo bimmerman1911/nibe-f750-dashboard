@@ -145,7 +145,7 @@ def plan_offsets(result,states,now,response,min_hz,max_hz):
     conductance=bounded(base_load/max(5,sample['supply']-room),.05,1.)
     initial={'room':room,'water':water,'dm':sample['dm'],'supply':sample['supply'],
              'heat':sample['heat'],'stored':m.get('initial_heat_kw',sample['heat']),
-             'morning_pending':m.get('dhw_morning_pending',False),'charging':sample['mode']=='Hot water','running':sample['heat']>0,'offset':sample['offset'],'cost':0.,'penalty':0.,'path':[]}
+             'morning_pending':m.get('dhw_morning_pending',False),'charging':sample['mode']=='Hot water' and sample['compressor_on'],'running':sample['heat']>0,'offset':sample['offset'],'cost':0.,'penalty':0.,'path':[]}
     beam=[initial]
     for slot in slots:
         dt=(slot['end']-slot['start'])/3600
