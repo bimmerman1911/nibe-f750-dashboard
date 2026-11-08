@@ -53,6 +53,8 @@ The card shows **Adaptive control** or **Temperature control** (fallback), the c
 
 Adaptive control now searches native heating-offset sequences instead of converting heating/coasting periods into 19/20°C targets. The search predicts supply temperature, degree-minute backlog, compressor/auxiliary demand and delayed room response. Prices, weather and indoor comfort bounds determine which sequence is selected. Room temperature remains a comfort constraint; the normal target stays stable.
 
+From v0.19.1, offset decisions can jump directly across the native range in one write; only the write timing is limited.
+
 The native-response model learns from observed operating data and persists alongside the house model. The existing fixed circuit relationship, DHW reservation and cloud-write cadence remain in place. Missing required offset/degree-minute data uses ordinary 20°C temperature control with Normal DHW, without the old price-triggered 19°C rule. [Operation and modelling assumptions](docs/offset-control.md).
 
 Update through Marketplace, restart HA and refresh the browser. No YAML, activation step or external model service.

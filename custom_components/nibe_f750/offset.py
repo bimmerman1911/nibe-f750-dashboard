@@ -60,6 +60,10 @@ class OffsetLearner:
         if sample['mode']!='Heating' or prev['mode']!='Heating':
             self.anchor=None
             return
+        # Fit stable-setting windows; a direct jump starts a fresh window.
+        if abs(delta)>1e-6:
+            self.anchor=sample
+            return
         if self.anchor is None:
             self.anchor=sample
             return
@@ -67,7 +71,7 @@ class OffsetLearner:
         if now-a['time']<900:
             return
         self.anchor=sample
-        if now-a['time']>1080 or abs(sample['offset']-a['offset'])>1:
+        if now-a['time']>1080:
             return
         x=[a['required']-a['supply'],-a['dm']/100,a['heat'],1.]
         theta,p=self.bank['theta'],self.bank['p']
@@ -103,6 +107,19 @@ def inputs(states,now,capacity):
             'outside':outside,'mode':mode.state,'compressor_on':hz>0,'inline':inline}
 
 
+def offset_levels(control):
+    """All values on the native entity's min/step grid, not a slew limit."""
+    lower,upper=(number(control.attributes.get(k)) for k in ('min','max'))
+    step=number(control.attributes.get('step',1.))
+    if lower is None or upper is None or step is None or step<=0 or lower>upper:
+        return []
+    count=math.floor((upper-lower)/step+1e-8)+1
+    # Invalid metadata must not allocate an unbounded search space.
+    if count>2048:
+        return []
+    return [round(lower+i*step,10) for i in range(count)]
+
+
 def plan_offsets(result,states,now,response,min_hz,max_hz):
     """Beam-search offset sequences against a simulated native heat response.
 
@@ -114,12 +131,9 @@ def plan_offsets(result,states,now,response,min_hz,max_hz):
     if not sample or not slots:
         return None
     control=states[C1]
-    lower,upper=(number(control.attributes.get(k)) for k in ('min','max'))
-    step=number(control.attributes.get('step')) or 1.
-    if lower is None or upper is None or step<=0 or lower>sample['offset'] or upper<sample['offset']:
+    levels=offset_levels(control)
+    if not levels or not levels[0]<=sample['offset']<=levels[-1]:
         return None
-    # One native step per decision, respecting the device's step and range.
-    delta=min(1.,step) if step<=1 else step
     gain=response.get('offset_gain',2.5);theta=response.get('theta',[.35,.25,.75,0.])
     cap=m['compressor_heat_kw'];lo=m['room_min_c'];hi=m['room_max_c'];target=m['room_target_c']
     room=result['initial_room'];water=result['initial_water']
@@ -136,10 +150,8 @@ def plan_offsets(result,states,now,response,min_hz,max_hz):
         dt=(slot['end']-slot['start'])/3600
         candidates=[]
         for prev in beam:
-            for change in (-delta,0.,delta):
-                offset=prev['offset']+change
-                if not lower<=offset<=upper:
-                    continue
+            for offset in levels:
+                change=offset-prev['offset']
                 required=sample['required']+gain*(offset-sample['offset'])-1.2*(slot['outdoor']-sample['outside'])
                 required=bounded(required,15,60)
                 r,w,dm,supply,heat,stored=(prev[k] for k in ('room','water','dm','supply','heat','stored'))

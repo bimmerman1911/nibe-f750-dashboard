@@ -1,5 +1,6 @@
 """Translate the current planned interval into native, bounded control targets."""
 from .engine import C1, ROOM1, ROOM2, fresh, number
+from .offset import offset_levels
 
 
 def request(forecast, states, now, model):
@@ -30,14 +31,13 @@ def request(forecast, states, now, model):
     # Reconcile a cached plan with actual settings and current room comfort.
     increment=number(states[C1].attributes.get('step')) or 1.
     if min(rooms)<lo:
-        offset=current_offset+increment
+        offset=max(offset,current_offset+increment)
     elif max(rooms)>hi:
-        offset=current_offset-increment
-    offset=max(current_offset-increment,min(current_offset+increment,offset))
-    lower,upper=(number(states[C1].attributes.get(k)) for k in ('min','max'))
-    if lower is None or upper is None:
+        offset=min(offset,current_offset-increment)
+    levels=offset_levels(states[C1])
+    if not levels:
         return None
-    offset=max(lower,min(upper,offset))
+    offset=min(levels,key=lambda v:abs(v-offset))
     desired=target
     reason='Optimising heating offset from prices, weather and delayed heat response'
     # Economy may produce essentially no DHW. Do not count a future charge
