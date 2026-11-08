@@ -1,16 +1,16 @@
 # NIBE F750 Dashboard
 
-A Home Assistant custom Lovelace card for a NIBE F750 connected through **Home Assistant’s built-in myUplink integration**. No second API client, credentials, or polling loop. Initial version: monitoring and manual comfort controls; smart optimization is planned.
+A read-only Home Assistant circuit diagram for a NIBE F750 connected through **Home Assistant’s built-in myUplink integration**. No separate API client or credentials.
 
 ![Dashboard preview](docs/dashboard.png)
 
 ## First release
 
-- Compact light dashboard with outdoor, indoor, hot-water and compressor readings. The diagram uses values beside the components and simple `Q = … kW` / `P = … kW` annotations. Extra readings, estimate notes and discovery settings are under **Details**.
+- Diagram-only light layout with bold `Q = … kW` / `P = … kW` values, BT sensor markers, red incoming air and blue outgoing air. No header panels or comfort controls. BT1/BT50 appear directly in the diagram.
 - One combined refrigerant and hydraulic schematic with mapped temperatures and a shared condenser heat exchanger. Refrigerant and water paths stay separate. Static arrows show normal direction; animated air, refrigerant and water paths illustrate operation and reported heating/DHW priority. Motion is not a flow measurement. Compact BT sensor markers follow the [manual-based location guide](docs/schematic.md). On narrow cards and iPhone portrait screens, the schematic automatically becomes a vertical layout with heat recovery above heat distribution; no horizontal scrolling.
-- Manual heating adjustment and hot-water mode through mapped `number` / `select` entities. Values and limits come from Home Assistant. Every write asks for confirmation and reports service errors.
 - Automatic discovery by myUplink parameter ID, with a device-scoped measurement-name fallback for API variations (including `sensor.vp_current_compressor_frequency`). Renamed entities still match stable IDs or original names. No manual sensor list required.
 - Diagram annotations show compressor P estimated with the supplied frequency/BT12 formula, sensible evaporator Q from reference airflow, and condenser Q derived as their sum. Corrupt water-flow readings are excluded. See [heat calculations](docs/heat-calculations.md).
+- Shower minutes beside the tank: reported duration if exposed, otherwise an approximate temperature-based estimate marked `≈`. Defaults: 180 L tank, 40°C shower, 10°C cold inlet and 10 L/min flow. See [shower estimates](docs/shower-time.md).
 - Missing entities show unavailable values. No guessed sensor IDs or fabricated live COP.
 - Interactive standalone demo with clearly labeled sample data.
 
@@ -19,14 +19,14 @@ A Home Assistant custom Lovelace card for a NIBE F750 connected through **Home A
 1. Set up [the built-in myUplink integration](https://www.home-assistant.io/integrations/myuplink/) under **Settings → Devices & services**. Connect your F750 to your myUplink account first. Enter OAuth credentials in Home Assistant, never in this card or the repository.
 2. Available data and writable controls depend on the equipment, firmware, API and subscription. Some entities may need enabling. myUplink normally updates every 60 seconds; this is a cloud dashboard, not real-time telemetry.
 3. Copy `dist/nibe-f750-card.js` to `/config/www/nibe-f750-card.js`.
-4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.10.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
+4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.11.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
 5. Add a manual dashboard card with just:
 
 ```yaml
 type: custom:nibe-f750-card
 ```
 
-The card discovers the built-in myUplink device, readings and supported comfort controls automatically. If several devices are present, it prefers a uniquely identified F750; otherwise choose a device in the card. Use a full-width panel view or a wide section for the circuit layout. **Details → Refresh discovery** rechecks registries after you enable entities. Registry access must be permitted for your Home Assistant account.
+The card discovers the built-in myUplink device and readings automatically. If several devices are present, it prefers a uniquely identified F750; otherwise choose a device in the card. Use a full-width panel view or a wide section for the circuit layout. Reload the dashboard after enabling entities. Setup/retry controls appear only when a device must be selected or discovery fails. Registry access must be permitted for your Home Assistant account.
 
 For HACS, add this repository as a custom **Dashboard** repository. `hacs.json` and the distributable file are included; this project is not listed in the default HACS catalog.
 
@@ -53,7 +53,7 @@ Manual mapping is an optional advanced override: providing `entities:` replaces 
 | `air_flow` | BS1 airflow with volume/time units, for the sensible-only evaporator estimate |
 | `reference_air_flow` | Automatically discovers `sensor.vp_reference_air_speed_sensor` and equivalents; takes precedence for a clearly labeled reference-airflow sensible evaporator Q estimate |
 
-`controls.heating` and `controls.hot_water` each accept a writable `number.*` or `select.*` entity. Choose the actual heating offset / hot water comfort setting exposed by your installation. The card calls `number.set_value` or `select.select_option`; it never commands compressor speed directly. A successful service call means the command was sent, not that the heat pump has applied it. Verify the subsequent state. myUplink may require a paid subscription for writes.
+Old `controls:` configuration is ignored; this version never writes heat pump settings.
 
 ## Preview and development
 
@@ -65,7 +65,7 @@ python -m http.server 8080
 node --check dist/nibe-f750-card.js
 ```
 
-Browser checks: install Playwright (`npm install --no-save playwright` and `npx playwright install chromium`), then run `npm test` while the preview server is running. Checks cover mobile layout, unavailable readings, valid/invalid writes, confirmation cancellation and service failures. `PREVIEW_URL` can override the preview origin.
+Browser checks: install Playwright (`npm install --no-save playwright` and `npx playwright install chromium`), then run `npm test` while the preview server is running. Checks cover portrait layout, sensor topology, heat calculations, off/zero compressor animation, air colors, shower estimates and device discovery. `PREVIEW_URL` can override the preview origin.
 
 ## Smart control roadmap
 

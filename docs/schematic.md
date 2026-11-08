@@ -10,8 +10,8 @@ A small circle marks the measuring location. A leader connects it to the BT iden
 
 | Marker | Location |
 | --- | --- |
-| BT1 | Outdoor sensor, top outdoor card |
-| BT50 | Room sensor, top indoor card |
+| BT1 | Outdoor sensor, upper ambient area of diagram |
+| BT50 | Room sensor, house symbol in upper ambient area |
 | BT20 | Inlet/extract air duct before evaporator |
 | BT21 | Outlet/discharge air duct after evaporator, outside refrigerant loop |
 | BT16 | Evaporator |
@@ -37,6 +37,8 @@ The older register catalog supplies IDs for BT6, BT7, BT14, BT17, BT61 and BT62.
 - Common water supply: condenser → BT12 → immersion heater (EB1) → BT63 → QN10 → selected heating or tank-coil branch → common return → BT3 → condenser.
 - The heating branch includes a simplified buffer before BT61. BT62 marks its return. BT6/BT7 measure stored tank water, not the primary-water coil.
 
-Static chevrons show normal design direction. Animated dashes follow path direction. Refrigerant motion follows positive compressor frequency; water motion illustrates operation when compressor or auxiliary heater is active. Heating/DHW branch motion uses the reported priority, and stops when the branch is unknown or unselected. Air motion uses a positive available airflow/reference reading. A reference value does not prove actual fan/air movement. No animation claims measured flow or an observed valve/pump state. Reduced-motion preference stops dashes while retaining direction chevrons.
+Static chevrons show normal design direction. Animated dashes follow path direction. Refrigerant motion requires positive compressor frequency and no explicit stopped/off status; water motion illustrates operation when compressor or auxiliary heater is active. Heating/DHW branch motion uses the reported priority, and stops when the branch is unknown or unselected. Air motion uses a positive available airflow/reference reading. A reference value does not prove actual fan/air movement. No animation claims measured flow or an observed valve/pump state. Inlet air is red and outlet air is blue. Reduced-motion preference stops dashes while retaining direction chevrons.
 
 The compressor-power and heat estimates are unchanged; see [heat calculations](heat-calculations.md).
+
+Shower time at the DHW tank: [reported duration or approximate mixing estimate](shower-time.md).

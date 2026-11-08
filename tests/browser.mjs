@@ -7,7 +7,7 @@ try {
   const errors=[]; page.on('pageerror',e=>errors.push(e.message));
   await page.goto(`${process.env.PREVIEW_URL || 'http://127.0.0.1:8080'}/demo/`);
   const card=page.locator('nibe-f750-card');
-  await card.getByText('Demo data',{exact:true}).waitFor();
+  await card.locator('.landscape [data-shower]').waitFor();
   assert.equal(await card.getByRole('img',{name:'Combined F750 refrigerant and hydraulic circuits'}).count(),1);
   assert.equal(await card.getByText('Smart control · planned').count(),0);
   const topology=await card.evaluate(c=>[...c.shadowRoot.querySelectorAll('svg')].map(svg=>{
@@ -25,7 +25,7 @@ try {
     svg.style.display=previous;return result;
   }));
   for(const t of topology) {
-    assert.deepEqual(t.sensors.slice().sort(),['BT3','BT6','BT7','BT12','BT14','BT15','BT16','BT17','BT20','BT21','BT61','BT62','BT63'].sort());
+    assert.deepEqual(t.sensors.slice().sort(),['BT1','BT50','BT3','BT6','BT7','BT12','BT14','BT15','BT16','BT17','BT20','BT21','BT61','BT62','BT63'].sort());
     for(const key of ['outletOutside','bt21OnAir','bt15OnLiquid','bt63OnCommon','commonHasHeater','branchesAfterHeater']) assert.equal(t[key],true,key);
   }
   const extraSensors=await page.evaluate(async()=>{
@@ -79,32 +79,42 @@ try {
   // Keep the requested light palette even when the surrounding HA theme is dark.
   await page.evaluate(()=>document.body.style.setProperty('--primary-text-color','#fff'));
   assert.equal(await card.locator('ha-card').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(255, 255, 255)');
-  await page.evaluate(()=>{window.calls=[];const original=window.demoHass.callService;window.demoHass.callService=async(...args)=>{window.calls.push(args);await original(...args);};});
-  const heating=card.getByRole('spinbutton');
-  await heating.fill('3');
-  page.once('dialog',d=>d.accept());
-  await card.getByRole('button',{name:'Apply',exact:true}).first().click();
-  await card.getByRole('status').filter({hasText:'Demo setting updated'}).waitFor();
-  assert.deepEqual(await page.evaluate(()=>window.calls[0]),['number','set_value',{entity_id:'number.demo_heating',value:3}]);
-  await heating.fill('100');
-  await card.getByRole('button',{name:'Apply',exact:true}).first().click();
-  assert.match(await card.getByRole('status').textContent(),/valid value/);
-  assert.equal(await page.evaluate(()=>window.calls.length),1);
-  await heating.fill('2');
-  page.once('dialog',d=>d.dismiss());
-  await card.getByRole('button',{name:'Apply',exact:true}).first().click();
-  assert.equal(await page.evaluate(()=>window.calls.length),1);
-  await card.getByRole('combobox').selectOption('Economy');
-  page.once('dialog',d=>d.accept());
-  await card.getByRole('button',{name:'Apply',exact:true}).last().click();
-  await page.waitForFunction(()=>window.calls.length===2);
-  assert.deepEqual(await page.evaluate(()=>window.calls[1]),['select','select_option',{entity_id:'select.demo_hot_water',option:'Economy'}]);
-  await page.evaluate(()=>{window.demoHass.callService=async()=>{throw new Error('denied');};});
-  page.once('dialog',d=>d.accept());
-  await card.getByRole('button',{name:'Apply',exact:true}).last().click();
-  await card.getByRole('status').filter({hasText:'could not be sent'}).waitFor();
+  assert.equal(await card.locator('header,.stats,.controls,details').count(),0);
+  assert.equal(await card.getByRole('button').count(),0);
+  assert.equal(await card.locator('.portrait .energy').evaluateAll(es=>es.length===3&&es.every(e=>getComputedStyle(e).fontWeight==='700'&&parseFloat(getComputedStyle(e).fontSize)>=15)),true);
+  const airColors=await card.evaluate(c=>{
+    const svg=c.shadowRoot.querySelector('.landscape');
+    return [getComputedStyle(svg.querySelector('[data-flow="air-inlet"] .flow')).stroke,getComputedStyle(svg.querySelector('[data-flow="air-outlet"] .flow')).stroke];
+  });
+  assert.deepEqual(airColors,['rgb(197, 77, 67)','rgb(57, 136, 194)']);
+  for(const state of ['0','off','unavailable','unknown','-1','']) {
+    await card.evaluate((c,state)=>{window.demoHass.states={...window.demoHass.states,'sensor.demo_compressor_frequency':{state,attributes:{unit_of_measurement:'Hz'}}};c.hass=window.demoHass;},state);
+    assert.equal(await card.locator('[data-flow^="refrigerant"] .flow:not(.paused)').count(),0,state);
+    assert.equal(await active('air-outlet'),1);
+  }
+  await card.evaluate(c=>{
+    c.config.entities.compressor_status='sensor.demo_status';
+    window.demoHass.states={...window.demoHass.states,'sensor.demo_compressor_frequency':{state:'52',attributes:{unit_of_measurement:'Hz'}},'sensor.demo_status':{state:'Stopped',attributes:{}}};c.hass=window.demoHass;
+  });
+  assert.equal(await card.locator('[data-flow^="refrigerant"] .flow:not(.paused)').count(),0);
+  await card.evaluate(c=>{delete c.config.entities.compressor_status;window.demoHass.states={...window.demoHass.states,'sensor.demo_compressor_frequency':{state:'52',attributes:{unit_of_measurement:'Hz'}}};c.hass=window.demoHass;});
+  assert.equal(await active('refrigerant-suction'),1);
+  const showers=await page.evaluate(async()=>{
+    const {calculateShowerTime}=await import('/dist/nibe-f750-card.js');
+    const state=(value,unit)=>({state:String(value),attributes:{unit_of_measurement:unit}});
+    const map={hot_water:'top',hot_water_charge:'bottom',shower_minutes:'reported'};
+    const run=(states,config)=>calculateShowerTime(states,map,config);
+    return {estimate:run({top:state(50,'°C'),bottom:state(45,'°C')}),reported:run({reported:state(16,'min')}),seconds:run({reported:state(960,'s')}),cold:run({top:state(35,'°C'),bottom:state(30,'°C')}),missing:run({top:state(50,'°C')}),badFlow:run({top:state(50,'°C'),bottom:state(45,'°C')},{flow_l_min:0}),percent:run({reported:state(16,'%')})};
+  });
+  assert.ok(Math.abs(showers.estimate.minutes-22.5)<1e-10);
+  assert.equal(showers.estimate.estimated,true);
+  assert.equal(showers.reported.minutes,16);
+  assert.equal(showers.reported.estimated,false);
+  assert.equal(showers.seconds.minutes,16);
+  assert.equal(showers.cold.minutes,0);
+  for(const key of ['missing','badFlow','percent']) assert.equal(showers[key],null,key);
   await page.getByRole('button',{name:'Toggle unavailable readings'}).click();
-  assert.match(await card.locator('.stats').textContent(),/—/);
+  assert.match(await card.locator('.portrait').textContent(),/—/);
   assert.equal(await card.locator('.flow:not(.paused)').count(),0);
   await page.getByRole('button',{name:'Toggle unavailable readings'}).click();
   await page.screenshot({path:'docs/dashboard.png',fullPage:true});
@@ -128,7 +138,7 @@ try {
     c.hass={states:{},callService:()=>{throw new Error('must not write');}};
   });
   assert.equal(await card.getByRole('button').count(),0);
-  assert.match(await card.locator('.pill').first().getAttribute('title'),/0\/1/);
+  assert.match(await card.locator('.portrait [data-sensor="BT1"]').textContent(),/—/);
   await page.evaluate(()=>{
     const c=document.querySelector('nibe-f750-card');
     const registry=[
@@ -148,15 +158,14 @@ try {
     c.setConfig({type:'custom:nibe-f750-card'});c.hass=window.autoHass;
   });
   await page.waitForFunction(()=>document.querySelector('nibe-f750-card')._discovered);
-  await card.locator('#details > summary').click();
-  assert.match(await card.locator('.stats').textContent(),/7/);
-  assert.equal(await card.getByRole('spinbutton').count(),1);
+  assert.match(await card.locator('.portrait').textContent(),/7/);
+  assert.equal(await card.getByRole('spinbutton').count(),0);
   assert.deepEqual(await card.evaluate(c=>Object.keys(c.config.entities)),['outdoor','compressor_frequency']);
   assert.equal(await card.evaluate(c=>c.config.entities.compressor_frequency),'sensor.vp_current_compressor_frequency');
-  assert.match(await card.locator('.stats').textContent(),/57/);
+  assert.match(await card.locator('.portrait').textContent(),/57/);
   // Ambiguous same-device names remain unmapped, rather than picking arbitrarily.
   await page.evaluate(()=>window.autoRegistry.push({entity_id:'sensor.duplicate',original_name:'Current compressor frequency',platform:'myuplink',device_id:'pump',unique_id:'other-unknown-frequency'}));
-  await card.getByRole('button',{name:'Refresh discovery'}).click();
+  await card.evaluate(c=>c.discover(true));
   await page.waitForFunction(()=>!document.querySelector('nibe-f750-card').config.entities.compressor_frequency);
   await page.evaluate(()=>window.autoRegistry.pop());
   await page.evaluate(()=>{
@@ -167,12 +176,12 @@ try {
   await card.getByText('Choose your heat pump below.').waitFor();
   assert.equal(await card.getByRole('spinbutton').count(),0);
   await card.locator('#device').selectOption('pump');
-  await card.getByRole('spinbutton').waitFor();
-  await card.locator('#device').selectOption('pump2');
+  await page.waitForFunction(()=>document.querySelector('nibe-f750-card')._selectedDevice==='pump');
+  await card.evaluate(c=>c.setConfig({type:'custom:nibe-f750-card',device_id:'pump2'}));
   await page.waitForFunction(()=>document.querySelector('nibe-f750-card').config.entities.outdoor==='sensor.second');
   assert.equal(await card.getByRole('spinbutton').count(),0);
   await page.evaluate(()=>{window.autoHass.callWS=async()=>{throw new Error('disconnected');};});
-  await card.getByRole('button',{name:'Refresh discovery'}).click();
+  await card.evaluate(c=>c.discover(true));
   await card.getByText(/Discovery failed/).waitFor();
   await page.evaluate(()=>{
     const c=document.querySelector('nibe-f750-card');
@@ -185,5 +194,5 @@ try {
   await card.evaluate(c=>{c.hass={...c._hass,states:{...c._hass.states,f:{state:'100',attributes:{unit_of_measurement:'Hz'}}}};});
   assert.match(await card.locator('.portrait').textContent(),/P = 1.61 kW/);
   assert.deepEqual(errors,[]);
-  console.log('PASS: diagrams, services, bounds, cancellation, errors, mobile layout, renamed entity discovery, disabled/unrelated filtering, device selection and discovery errors.');
+  console.log('PASS: diagram-only layout, formulas, topology, compressor stop states, air colors, shower time, mobile layout and device discovery.');
 } finally { await browser.close(); }
