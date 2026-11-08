@@ -14,7 +14,8 @@ class Tests(unittest.TestCase):
         self.assertEqual(m.policy(49,False,True,now,MODEL)['dhw'],'Normal')
         self.assertEqual(m.policy(42,False,False,now,MODEL)['dhw'],'Normal')
         self.assertEqual(m.policy(47,True,False,now,MODEL)['dhw'],'Normal')
-        self.assertEqual(m.policy(49,True,False,now,MODEL)['dhw'],'Economy')
+        self.assertEqual(m.policy(49,True,False,now,MODEL)['dhw'],'Normal')
+        self.assertEqual(m.policy(52,True,False,now,MODEL)['dhw'],'Economy')
 
     def test_morning_deadline_and_recovery(self):
         now=at('2026-11-04T05:00:00+01:00')

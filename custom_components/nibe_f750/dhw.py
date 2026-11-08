@@ -39,7 +39,7 @@ def policy(tank, charging, scheduled, now, model):
     local=datetime.fromtimestamp(now,ZoneInfo(zone))
     overdue=6<=local.hour<8 and tank<full
     low=tank<model['tank_min_c']+2 or deferred<model['tank_min_c']+2
-    finish=charging and tank<model['tank_target_c']
+    finish=charging and tank<full
     reason='06:00 full-charge reserve' if morning or overdue else 'Low hot-water reserve' if low else 'Finishing necessary charge' if finish else 'Scheduled DHW period' if scheduled else 'Charging deferred'
     normal=scheduled or morning or overdue or low or finish
     return {'dhw':'Normal' if normal else 'Economy','dhw_reason':reason,
