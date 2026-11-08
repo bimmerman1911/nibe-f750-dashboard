@@ -23,7 +23,6 @@ class Controller:
         self.targets = []
         self.telemetry = {}
         self.short_since = None
-        self.started = clock()
         self.lock = asyncio.Lock()
         self.listeners = set()
         self.stopping = False
@@ -86,9 +85,6 @@ class Controller:
             return
         if not self.data['enabled']:
             self.status = 'Paused'
-            return
-        if now-self.started < 900:
-            self.status = 'Starting'
             return
         water = all(fresh(states.get(e), now) for e in (SUPPLY, REQUIRED, PRIORITY))
         short = water and states[PRIORITY].state == 'Heating' and number(states[SUPPLY].state) is not None and number(states[REQUIRED].state) is not None and float(states[SUPPLY].state) < float(states[REQUIRED].state)-2

@@ -19,7 +19,7 @@ type: custom:nibe-f750-card
 type: custom:nibe-f750-smart-card
 ```
 
-Control is enabled by default after setup, with a **15-minute startup waiting period**. Pause/Resume is available in the Smart Control card and the integration's control switch. Paused state and write timestamps survive restarts. No dashboard needs to remain open.
+Control is enabled by default after setup and checks readings immediately. There is **no fixed startup delay**; saved timestamps still enforce the normal write interval after a recent request. Pause/Resume is available in the Smart Control card and the integration's control switch. Paused state and write timestamps survive restarts. No dashboard needs to remain open.
 
 The controller uses the owner's confirmed room entities: upstairs C1 `sensor.ovanvaning_temperature`, downstairs C2 `sensor.nedervaning_temperature`, existing `vp_*` myUplink controls, and `sensor.nordpool_kwh_se3_sek_3_10_025`. Other installations need equivalent entity names; configurable source selection is not included yet. Existing diagram sensor discovery remains automatic. Add SMHI through HA for hourly forecasts in the Smart Control card.
 

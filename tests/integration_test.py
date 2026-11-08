@@ -77,16 +77,16 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_default_start_and_rolling_budget(self):
         await self.controller.async_start()
         self.assertTrue(self.controller.data['enabled'])
-        self.assertEqual(self.controller.status, 'Starting')
+        self.assertEqual(self.controller.status, 'Running')
         start = self.hass.time
         for minute in range(90):
             self.hass.time = start+minute*60
             await self.controller.async_tick()
-        self.assertEqual(len(self.hass.calls), 15)
+        self.assertEqual(len(self.hass.calls), 18)
         for t, *_ in self.hass.calls:
             self.assertLessEqual(sum(t <= call[0] < t+900 for call in self.hass.calls), 3)
 
-    async def test_pause_restores_and_reload_waits(self):
+    async def test_pause_restores_and_reload_preserves_budget(self):
         await self.controller.async_start()
         await self.controller.async_enable(False)
         restored = runtime.Controller(self.hass, clock=lambda: self.hass.time)
@@ -94,15 +94,13 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(restored.data['enabled'])
         self.assertEqual(restored.status, 'Paused')
         await restored.async_enable(True)
-        self.assertEqual(restored.status, 'Starting')
-        self.assertEqual(self.hass.calls, [])
+        self.assertEqual(restored.status, 'Running')
+        self.assertEqual(len(self.hass.calls), 3)
 
     async def test_failures_reserve_budget_and_persist(self):
-        await self.controller.async_start()
-        self.hass.time += 901
         self.hass.fail = True
         with self.assertLogs(runtime._LOGGER, level='ERROR'):
-            await self.controller.async_tick()
+            await self.controller.async_start()
         self.assertEqual(len(self.hass.calls), 3)
         last = self.hass.time
         await self.controller.async_tick()
@@ -113,11 +111,9 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.hass.calls), 3)
 
     async def test_failed_storage_prevents_writes(self):
-        await self.controller.async_start()
-        self.hass.time += 901
         self.controller.store.fail = True
         with self.assertLogs(runtime._LOGGER, level='ERROR'):
-            await self.controller.async_tick()
+            await self.controller.async_start()
         self.assertEqual(self.hass.calls, [])
         self.assertEqual(self.controller.status, 'Controller error')
 
@@ -147,6 +143,22 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(controller.status, 'Running')
             self.assertEqual(len(self.hass.calls), 3)
 
+    async def test_report_timestamp_rounding_tolerates_tiny_skew(self):
+        state = self.hass.states.async_all()[0]
+        state.last_reported = datetime.fromtimestamp(self.hass.time+.000001, timezone.utc)
+        self.assertTrue(engine.fresh(state, self.hass.time))
+        state.last_reported = datetime.fromtimestamp(self.hass.time+60, timezone.utc)
+        self.assertFalse(engine.fresh(state, self.hass.time))
+
+    async def test_start_waits_only_for_missing_readings(self):
+        self.hass.states.values[engine.ROOM1] = 'unavailable'
+        await self.controller.async_start()
+        self.assertEqual(self.controller.status, 'Waiting for readings')
+        self.assertEqual(self.hass.calls, [])
+        self.hass.states.values[engine.ROOM1] = '20.5'
+        await self.controller.async_tick()
+        self.assertEqual(len(self.hass.calls), 3)
+
     async def test_policy_c1_priority_missing_readings_and_dhw(self):
         self.hass.states.values[engine.ROOM1] = '19.1'
         states = {s.entity_id:s for s in self.hass.states.async_all()}
@@ -160,15 +172,13 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(engine.C2,[e for e,v in engine.calculate(states,self.hass.time,12)['writes']])
 
     async def test_pause_during_reservation_stops_dispatch(self):
-        await self.controller.async_start()
-        self.hass.time += 901
         original = self.controller.store.async_save
         async def save(data):
             await original(data)
             if data['last_attempt']:
                 self.controller.data['enabled'] = False
         self.controller.store.async_save = save
-        await self.controller.async_tick()
+        await self.controller.async_start()
         self.assertEqual(self.hass.calls, [])
 
 class SetupTests(unittest.IsolatedAsyncioTestCase):

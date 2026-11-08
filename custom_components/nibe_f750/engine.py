@@ -34,7 +34,7 @@ def fresh(state, now):
     if not state or state.state in ('unknown', 'unavailable') or state.attributes.get('restored'):
         return False
     reported = getattr(state, 'last_reported', None)
-    return reported is not None and 0 <= now - reported.timestamp() <= 1800
+    return reported is not None and -5 <= now - reported.timestamp() <= 1800
 
 
 def calculate(states, now, hour, persistent_shortfall=False):

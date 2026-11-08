@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "NIBE F750 Smart Control",
-        "description": "Use your existing myUplink entities and automatically install both dashboard cards. Control starts after a 15-minute waiting period. Disable the old thermostat/DHW automations. If migrating, remove the old nibe_f750_trial.yaml package and restart HA first."
+        "description": "Use your existing myUplink entities and automatically install both dashboard cards. Control starts as soon as valid readings are available. Existing write timestamps still limit repeated requests. Disable the old thermostat/DHW automations. If migrating, remove the old nibe_f750_trial.yaml package and restart HA first."
       }
     },
     "abort": {

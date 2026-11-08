@@ -4,7 +4,7 @@ The controller and both cards now install together as a **HACS Integration**. Fo
 
 **Existing installation:** remove the old `nibe_f750_trial.yaml` package, change the HACS repository category from Dashboard to Integration, install, restart HA and add **NIBE F750 Smart Control** under Devices & services. No replacement YAML file is needed. Keep the three old thermostat/DHW automations disabled.
 
-The new controller refuses to write while old YAML controller entities remain. Its switch starts enabled after first setup; a manual pause persists. Every integration start/reload waits 15 minutes before writing. Writes are serialized and durably reserved; failed writes consume the budget. Updates thereafter use HACS.
+The new controller refuses to write while the old YAML writer service remains loaded. Its switch starts enabled after first setup; a manual pause persists. Integration start/reload checks inputs immediately, without a fixed waiting period. Saved write timestamps still prevent a quick restart from bypassing the normal interval. Writes are serialized and durably reserved; failed writes consume the budget. Updates thereafter use HACS.
 
 The same C1/C2 coupling, 2°C supply-shortfall margin, one-step offset changes and DHW price rules are implemented in Python. The actual room measurements are upstairs C1 and downstairs C2. BT61 is a shared distribution-supply proxy, not a measurement at every radiator. A low supply reading during DHW priority is not treated as a C2-induced heating shortfall.
 
