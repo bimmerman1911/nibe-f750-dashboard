@@ -156,5 +156,55 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.hass.calls, [])
 
+class SetupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_setup_registers_frontend_and_unloads(self):
+        # Contract-shaped fakes exercise the actual integration entrypoints.
+        for name in ['homeassistant.components', 'homeassistant.components.http',
+                     'homeassistant.exceptions', 'homeassistant.const']:
+            sys.modules.setdefault(name, ModuleType(name))
+        sys.modules['homeassistant.components.http'].StaticPathConfig = lambda *args: args
+        sys.modules['homeassistant.exceptions'].ConfigEntryNotReady = RuntimeError
+        sys.modules['homeassistant.const'].Platform = SimpleNamespace(SENSOR='sensor', SWITCH='switch')
+        module = ModuleType('_nibe_test.setup')
+        module.__package__ = '_nibe_test'
+        module.__file__ = str(COMPONENT/'__init__.py')
+        exec(compile((COMPONENT/'__init__.py').read_text(), module.__file__, 'exec'), module.__dict__)
+        class Resources:
+            loaded = False
+            def __init__(self):
+                self.items = [{'id':'old', 'url':'/hacsfiles/nibe-f750-dashboard/nibe-f750-card.js'}]
+            async def async_load(self):
+                self.loaded = True
+            def async_items(self):
+                return self.items
+            async def async_create_item(self, data):
+                self.items.append({'id':'new', **data})
+            async def async_update_item(self, id, data):
+                next(i for i in self.items if i['id']==id).update(data)
+            async def async_delete_item(self, id):
+                self.items = [i for i in self.items if i['id']!=id]
+        Store.saved = None
+        hass = Fixture()
+        resources = Resources()
+        hass.data = {'lovelace':SimpleNamespace(resources=resources)}
+        paths = []
+        async def register(config):
+            paths.extend(config)
+        async def forward(entry, platforms):
+            self.assertEqual(platforms, ['sensor','switch'])
+        async def unload(entry, platforms):
+            return True
+        hass.http = SimpleNamespace(async_register_static_paths=register)
+        hass.config_entries = SimpleNamespace(async_forward_entry_setups=forward, async_unload_platforms=unload)
+        entry = SimpleNamespace(entry_id='one')
+        self.assertTrue(await module.async_setup_entry(hass, entry))
+        self.assertEqual(len(paths),1)
+        self.assertEqual(resources.items, [{'id':'new','url':module.URL,'res_type':'module'}])
+        self.assertTrue(await module.async_unload_entry(hass, entry))
+        self.assertTrue(await module.async_setup_entry(hass, entry))
+        self.assertEqual(len(paths),1)  # Reload must not register the route twice.
+        self.assertEqual(len(resources.items),1)
+        self.assertTrue(await module.async_unload_entry(hass, entry))
+
 if __name__ == '__main__':
     unittest.main()
