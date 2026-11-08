@@ -1,0 +1,197 @@
+# Install in /config/packages and restart HA. See docs/live-control.md.
+# A native HA backend; the dashboard never writes to myUplink directly.
+input_boolean:
+  nibe_smart_control_enabled:
+    name: NIBE Smart Control
+    icon: mdi:heat-pump
+  nibe_smart_control_ready:
+    name: NIBE controller startup ready
+    initial: false
+input_datetime:
+  nibe_smart_control_last_cycle:
+    name: NIBE last control cycle
+    has_date: true
+    has_time: true
+  nibe_smart_control_last_attempt:
+    name: NIBE last cloud write attempt
+    has_date: true
+    has_time: true
+
+automation:
+  - id: nibe_smart_control_startup
+    alias: NIBE controller startup quiet period
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    actions:
+      - delay: "00:15:00"
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.nibe_smart_control_ready
+  - id: nibe_smart_control_tick
+    alias: NIBE Smart Control trial
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        minutes: /1
+    conditions:
+      - condition: state
+        entity_id: input_boolean.nibe_smart_control_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.nibe_smart_control_ready
+        state: "on"
+    actions:
+      - action: script.nibe_smart_control_cycle
+
+script:
+  nibe_smart_control_cycle:
+    alias: NIBE bounded trial cycle
+    mode: single
+    max_exceeded: silent
+    sequence:
+      - condition: state
+        entity_id: input_boolean.nibe_smart_control_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.nibe_smart_control_ready
+        state: "on"
+      # These restored helpers gate both reloads and manual script calls.
+      # Waiting from the LAST attempt also bounds rolling windows across batches.
+      - condition: template
+        value_template: >-
+          {{ as_timestamp(now()) - as_timestamp(states('input_datetime.nibe_smart_control_last_cycle'), 0) >= 902
+             and as_timestamp(now()) - as_timestamp(states('input_datetime.nibe_smart_control_last_attempt'), 0) >= 902 }}
+      - variables:
+          room_c1: "{{ states('sensor.ovanvaning_temperature') }}"
+          room_c2: "{{ states('sensor.nedervaning_temperature') }}"
+          current_c1: "{{ states('number.vp_heating_offset_climate_system_1') }}"
+          current_c2: "{{ states('number.vp_heating_offset_climate_system_2') }}"
+          target_c1: >-
+            {% set p = states('sensor.nordpool_kwh_se3_sek_3_10_025') %}
+            {% set outside = states('sensor.vp_average_outdoor_temp_bt1') %}
+            {% set extract = states('sensor.vp_exhaust_air_bt20') %}
+            {{ 20 if not is_number(p) or not is_number(outside) or not is_number(extract)
+               or state_attr('sensor.nordpool_kwh_se3_sek_3_10_025', 'low_price') == true
+               or p|float(0) < 1.5 or outside|float(0) < 2 or extract|float(0) < 18 else 19 }}
+          target_c2: "{{ [room_c2|float(0)|round(0, 'ceil'), target_c1|float(20)]|min }}"
+          next_c1: >-
+            {% set error = target_c1|float - room_c1|float(0) %}
+            {% set step = 1 if error > 0.3 else -1 if error < -0.3 else 0 %}
+            {{ current_c1|float(0) + step }}
+          next_c2: >-
+            {% set error = target_c2|float - room_c2|float(0) %}
+            {% set c1_satisfied = room_c1|float(0) >= target_c1|float - 0.3 %}
+            {% set step = 1 if error > 0.3 and c1_satisfied else -1 if error < -0.3 else 0 %}
+            {{ current_c2|float(0) + step }}
+          next_dhw: >-
+            {% set e = 'sensor.nordpool_kwh_se3_sek_3_10_025' %}
+            {% set p = states(e) %}
+            {% set avg = state_attr(e, 'average') %}
+            {% set mn = state_attr(e, 'min') %}
+            {% set mx = state_attr(e, 'max') %}
+            {% set outside = states('sensor.vp_average_outdoor_temp_bt1') %}
+            {% set night = now().hour >= 22 or now().hour < 6 %}
+            {% set economy = not night and is_number(p) and is_number(avg) and is_number(mn)
+              and is_number(mx) and is_number(outside) and p|float(0) > avg|float(0)
+              and p|float(0) > 1.5 and mn|float(0) > 0
+              and mx|float(0) / mn|float(1) >= 1.30 and outside|float(0) > 2 %}
+            {{ 'Economy' if economy else 'Normal' }}
+      # Unknown room/offset states stop this trial; do not use float(0) as live data.
+      - condition: template
+        value_template: >-
+          {{ is_number(room_c1) and is_number(room_c2) and is_number(current_c1) and is_number(current_c2)
+             and 5 <= room_c1|float <= 35 and 5 <= room_c2|float <= 35 }}
+      - condition: template
+        value_template: >-
+          {% set ns = namespace(fresh=true) %}
+          {% for e in ['sensor.ovanvaning_temperature', 'sensor.nedervaning_temperature',
+             'number.vp_heating_offset_climate_system_1', 'number.vp_heating_offset_climate_system_2'] %}
+            {% if state_attr(e, 'restored') == true
+               or as_timestamp(now()) - as_timestamp(states[e].last_reported, 0) > 1800 %}
+              {% set ns.fresh = false %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.fresh }}
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.nibe_smart_control_last_cycle
+        data:
+          timestamp: "{{ as_timestamp(now()) }}"
+      # Local helpers are optional and do not contact NIBE.
+      - if: "{{ has_value('input_number.set_temp_c1') }}"
+        then:
+          - action: input_number.set_value
+            continue_on_error: true
+            target:
+              entity_id: input_number.set_temp_c1
+            data:
+              value: "{{ target_c1 }}"
+      - if: "{{ has_value('input_number.set_temp_c2') }}"
+        then:
+          - action: input_number.set_value
+            continue_on_error: true
+            target:
+              entity_id: input_number.set_temp_c2
+            data:
+              value: "{{ target_c2 }}"
+      - variables:
+          writes:
+            - entity: number.vp_heating_offset_climate_system_1
+              domain: number
+              service: set_value
+              value: "{{ next_c1 }}"
+            - entity: number.vp_heating_offset_climate_system_2
+              domain: number
+              service: set_value
+              value: "{{ next_c2 }}"
+            - entity: select.vp_comfort_mode
+              domain: select
+              service: select_option
+              value: "{{ next_dhw }}"
+      - repeat:
+          for_each: "{{ writes }}"
+          sequence:
+            # Recheck Stop before every cloud attempt. Never retry in this batch.
+            - condition: state
+              entity_id: input_boolean.nibe_smart_control_enabled
+              state: "on"
+            - if: >-
+                {% set w = repeat.item %}
+                {{ has_value(w.entity) and
+                  ((w.domain == 'number' and is_number(states(w.entity)) and is_number(w.value)
+                    and is_number(state_attr(w.entity, 'min')) and is_number(state_attr(w.entity, 'max'))
+                    and state_attr(w.entity, 'min')|float <= w.value|float <= state_attr(w.entity, 'max')|float
+                    and (states(w.entity)|float - w.value|float)|abs > 0.01)
+                   or (w.domain == 'select' and w.value in (state_attr(w.entity, 'options') or [])
+                    and states(w.entity) != w.value)) }}
+              then:
+                # Reserve the attempt BEFORE dispatch, including failed calls.
+                - action: input_datetime.set_datetime
+                  target:
+                    entity_id: input_datetime.nibe_smart_control_last_attempt
+                  data:
+                    timestamp: "{{ as_timestamp(now()) }}"
+                - choose:
+                    - conditions: "{{ repeat.item.domain == 'number' }}"
+                      sequence:
+                        - action: number.set_value
+                          continue_on_error: true
+                          target:
+                            entity_id: "{{ repeat.item.entity }}"
+                          data:
+                            value: "{{ repeat.item.value }}"
+                  default:
+                    - action: select.select_option
+                      continue_on_error: true
+                      target:
+                        entity_id: "{{ repeat.item.entity }}"
+                      data:
+                        option: "{{ repeat.item.value }}"
+                # Also cover service latency and second-resolution helper storage.
+                - action: input_datetime.set_datetime
+                  target:
+                    entity_id: input_datetime.nibe_smart_control_last_attempt
+                  data:
+                    timestamp: "{{ as_timestamp(now()) }}"

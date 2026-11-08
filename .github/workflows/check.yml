@@ -8,6 +8,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install jinja2 pyyaml
+      - run: python tests/control_test.py
       - run: npm run check
       - run: npm install --no-save playwright@1.56.1
       - run: npx playwright install --with-deps chromium

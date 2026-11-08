@@ -31,7 +31,7 @@ try {
     registry.push({entity_id:'weather.smhi_home',platform:'smhi'},{entity_id:'sensor.nordpool_kwh_se3_sek_3_10_025',platform:'nordpool',config_entry_id:'pool'});
     const prices=Array.from({length:80},(_,i)=>({start:new Date(start+i*900000).toISOString(),end:new Date(start+(i+1)*900000).toISOString(),value:i<20?.4:1.3}));
     const weather=Array.from({length:26},(_,i)=>({datetime:new Date(start-3600000+i*3600000).toISOString(),temperature:2+i*.1}));
-    window.smartHass={config:{time_zone:'Europe/Stockholm'},states:{'weather.smhi_home':{state:'cloudy',attributes:{temperature_unit:'°C',temperature:2}},'sensor.nordpool_kwh_se3_sek_3_10_025':{state:'.4',attributes:{unit_of_measurement:'SEK/kWh',raw_today:prices,tomorrow_valid:false}},'sensor.room':state(20.1,'°C'),'sensor.ovanvaning_temperature':state(20.1,'°C'),'sensor.tank_top':state(49,'°C'),'sensor.tank_control':state(49,'°C'),'sensor.frequency':state(0,'Hz'),'input_number.set_temp_c1':state(20,'°C'),'input_number.set_temp_c2':state(20,'°C'),'number.vp_heating_offset_climate_system_1':state(1,''),'number.vp_heating_offset_climate_system_2':state(0,'')},callWS:async request=>{
+    window.smartHass={config:{time_zone:'Europe/Stockholm'},states:{'weather.smhi_home':{state:'cloudy',attributes:{temperature_unit:'°C',temperature:2}},'sensor.nordpool_kwh_se3_sek_3_10_025':{state:'.4',attributes:{unit_of_measurement:'SEK/kWh',raw_today:prices,tomorrow_valid:false}},'sensor.room':state(20.1,'°C'),'sensor.ovanvaning_temperature':state(20.1,'°C'),'sensor.nedervaning_temperature':state(20.1,'°C'),'sensor.tank_top':state(49,'°C'),'sensor.tank_control':state(49,'°C'),'sensor.frequency':state(0,'Hz'),'input_number.set_temp_c1':state(20,'°C'),'input_number.set_temp_c2':state(20,'°C'),'number.vp_heating_offset_climate_system_1':state(1,''),'number.vp_heating_offset_climate_system_2':state(0,'')},callWS:async request=>{
       window.smartCalls.push(request);
       if(request.type==='config/entity_registry/list')return registry;
       if(request.type==='config/device_registry/list')return [{id:'pump',name:'F750',model:'F750'}];
@@ -54,6 +54,18 @@ try {
   assert.equal(await card.evaluate(c=>c._plan),null);
   assert.equal(await card.getByRole('img').count(),0);
   assert.deepEqual(await card.locator('.zone strong').allTextContents(),['— °C','— °C']);
+  await page.evaluate(()=>{
+    const c=document.querySelector('nibe-f750-smart-card');
+    window.controlCalls=[];
+    window.smartHass.callService=async(...args)=>window.controlCalls.push(args);
+    window.smartHass.states['input_boolean.nibe_smart_control_enabled']={state:'off',attributes:{}};
+    c.hass=window.smartHass;c.render();
+  });
+  await card.getByRole('button',{name:'Start trial'}).click();
+  assert.deepEqual(await page.evaluate(()=>window.controlCalls),[['input_boolean','turn_on',{entity_id:'input_boolean.nibe_smart_control_enabled'}]]);
+  await page.evaluate(()=>{const c=document.querySelector('nibe-f750-smart-card');window.smartHass.states['input_boolean.nibe_smart_control_enabled']={state:'on',attributes:{}};c.hass=window.smartHass;c.render();});
+  await card.getByRole('button',{name:'Pause control'}).click();
+  assert.equal(await page.evaluate(()=>window.controlCalls[1][1]),'turn_off');
   assert.deepEqual(errors,[]);
   console.log('PASS: Smart Control desktop/portrait, live HA discovery, read-only sources, forecast failure and cleared plans.');
 } finally {await browser.close();}

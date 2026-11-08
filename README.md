@@ -19,7 +19,7 @@ A read-only Home Assistant circuit diagram for a NIBE F750 connected through **H
 1. Set up [the built-in myUplink integration](https://www.home-assistant.io/integrations/myuplink/) under **Settings → Devices & services**. Connect your F750 to your myUplink account first. Enter OAuth credentials in Home Assistant, never in this card or the repository.
 2. Available data and writable controls depend on the equipment, firmware, API and subscription. Some entities may need enabling. myUplink normally updates every 60 seconds; this is a cloud dashboard, not real-time telemetry.
 3. Copy `dist/nibe-f750-card.js` to `/config/www/nibe-f750-card.js`.
-4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.12.1` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
+4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.13.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
 5. Add a manual dashboard card with just:
 
 ```yaml
@@ -67,9 +67,11 @@ node --check dist/nibe-f750-card.js
 
 Browser checks: install Playwright (`npm install --no-save playwright` and `npx playwright install chromium`), then run `npm test` while the preview server is running. Checks cover portrait layout, sensor topology, heat calculations, off/zero compressor animation, air colors, shower estimates and device discovery. `PREVIEW_URL` can override the preview origin.
 
-## New: Smart Control planning card
+## Smart Control and live trial
 
-A separate `custom:nibe-f750-smart-card` previews a two-zone, price/weather-aware heating and DHW plan using Home Assistant’s Nord Pool and SMHI integrations. The original diagram is unchanged. This is read-only planning; existing automations remain in charge. The supplied C2 target dependency is displayed. Live two-zone schedules await a coupled hydraulic model; the fixed heat split is a demo assumption.
+An optional [live trial backend](docs/live-control.md) now adjusts the two heating offsets and DHW mode, with persistent write limiting and Start/Pause in the card. It uses the confirmed upstairs C1 and downstairs C2 room readings. The one-time Home Assistant package installation is required for live control.
+
+A separate `custom:nibe-f750-smart-card` previews a two-zone, price/weather-aware heating and DHW plan using Home Assistant’s Nord Pool and SMHI integrations. The original diagram is unchanged. The planning demo remains separate from live trial control. The supplied C2 target dependency is displayed. Live two-zone schedules await a coupled hydraulic model; the fixed heat split is a demo assumption.
 
 [Preview](docs/smart-desktop.png) · [Setup, model limits and design](docs/smart-control.md). Both cards are included in the existing HACS download. Update/redownload and refresh, then add `type: custom:nibe-f750-smart-card`; no additional JavaScript resource is needed.
 
