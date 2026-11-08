@@ -20,16 +20,13 @@ The card excludes disabled entities and other integrations, scopes every match t
 | Compressor | 43136 | Actual frequency; not requested/target/min/max frequency |
 | Auxiliary heater | 43084 | Internal electrical addition power |
 | Operation | 49994 | Current priority |
-| Compressor power | 43141 | Optional inverter-to-compressor power; may not be exposed by myUplink |
-| Compressor energy | 43144 | Optional compressor-only energy; history-derived average P requires Wh/kWh, not hours or a dimensionless time factor |
-| Water flow | 40072 | BF1 EP14 flow, requires physical volume/time units |
 | Condenser water outlet | 40017 | BT12, before auxiliary heating |
 | Reference airflow | 43124 | `reference_air_speed_sensor`, reference airflow / airflow ref aliases; sensible-Q estimate requires physical volume/time units |
 | Airflow | 40050 | BS1, requires physical volume/time units (unitless readings are not assumed to be m³/h) |
 | Heating adjustment | 47011 | Heating curve offset, system 1; writable `number` only |
 | Hot water mode | 47041 | Comfort mode; writable `select` or `number` only |
 
-The register list documents the F750 parameter semantics; it does not guarantee every parameter is exposed by every myUplink firmware/API version. When a parameter ID is unrecognized, sensor discovery tries explicit measurement-name aliases against the registry original name, custom name, current friendly name and entity ID. For example, `sensor.vp_current_compressor_frequency` matches current compressor frequency. All candidates must still belong to the selected myUplink device and be enabled. Compressor target, requested, minimum and maximum names are excluded. Multiple matching candidates remain unmapped. Writable controls still require the known parameter ID; they never use name fallback. Missing sensors may be disabled, unavailable from the cloud, or absent in the installation. The card does not enable entities itself. Indoor temperature requires a room sensor. COP and electrical input are not automatically inferred: neither follows from frequency or heater power. They remain optional manual mappings of separately measured/calculated entities.
+The register list documents the F750 parameter semantics; it does not guarantee every parameter is exposed by every myUplink firmware/API version. When a parameter ID is unrecognized, sensor discovery tries explicit measurement-name aliases against the registry original name, custom name, current friendly name and entity ID. For example, `sensor.vp_current_compressor_frequency` matches current compressor frequency. All candidates must still belong to the selected myUplink device and be enabled. Compressor target, requested, minimum and maximum names are excluded. Multiple matching candidates remain unmapped. Writable controls still require the known parameter ID; they never use name fallback. Missing sensors may be disabled, unavailable from the cloud, or absent in the installation. The card does not enable entities itself. Indoor temperature requires a room sensor. COP and total electrical input remain optional mappings of separately measured/calculated entities. Compressor P is now explicitly estimated from actual frequency and BT12 using the owner-supplied empirical formula; see [heat calculations](heat-calculations.md). Water flow and energy history are no longer used.
 
 ## Sources inspected
 

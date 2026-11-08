@@ -10,56 +10,38 @@ try {
   await card.getByText('Demo data',{exact:true}).waitFor();
   assert.equal(await card.getByRole('img',{name:'Combined F750 refrigerant and hydraulic circuits'}).count(),1);
   assert.equal(await card.getByText('Smart control · planned').count(),0);
-  const heatCases=await page.evaluate(async()=>{
-    const {calculateHeat}=await import('/dist/nibe-f750-card.js');
-    const state=(state,unit)=>({state:String(state),attributes:{unit_of_measurement:unit}});
-    const entities={compressor_power:'p',water_flow:'flow',condenser_water_out:'out',return:'back',air_flow:'air',exhaust_air:'extract',leaving_air:'discharge'};
-    const base={p:state(950,'W'),flow:state(10,'l/min'),out:state(35,'°C'),back:state(30,'°C'),air:state(180,'m³/h'),extract:state(21,'°C'),discharge:state(-3,'°C')};
-    const run=changes=>calculateHeat({...base,...changes},entities);
-    return {normal:run({}),equivalent:run({p:state(.95,'kW'),flow:state(.6,'m³/h'),out:state(95,'°F'),back:state(86,'°F')}),airOnly:run({flow:state('unavailable','l/min')}),unknownAirUnit:run({flow:state('unavailable','l/min'),air:state(180,'')}),negativeDelta:run({out:state(20,'°C')}),missing:calculateHeat({},entities),off:run({p:state(0,'W'),air:state('unavailable','m³/h')}),energyInsteadOfPower:run({p:state(50,'kWh')}),blank:run({p:state(' ','W')})};
-  });
-  assert.ok(Math.abs(heatCases.normal.qCondenser-3.472883333333333)<1e-8);
-  assert.ok(Math.abs(heatCases.normal.qEvaporator-2.522883333333333)<1e-8);
-  assert.equal(heatCases.normal.compressor,.95);
-  assert.deepEqual(heatCases.equivalent,heatCases.normal);
-  assert.ok(Math.abs(heatCases.airOnly.qEvaporator-1.44864)<1e-8);
-  assert.equal(heatCases.airOnly.evaporatorMethod,'sensible');
-  assert.equal(heatCases.unknownAirUnit.qEvaporator,null);
-  assert.equal(heatCases.negativeDelta.qCondenser,null);
-  assert.equal(heatCases.missing.compressor,null);
-  assert.equal(heatCases.missing.qCondenser,null);
-  assert.equal(heatCases.off.qEvaporator,null);
-  assert.equal(heatCases.energyInsteadOfPower.compressor,null);
-  assert.equal(heatCases.blank.compressor,null);
-  const referenceCases=await page.evaluate(async()=>{
+  const cases=await page.evaluate(async()=>{
     const {calculateHeat,discoverEntities}=await import('/dist/nibe-f750-card.js');
-    const entities={reference_air_flow:'sensor.vp_reference_air_speed_sensor',exhaust_air:'extract',leaving_air:'discharge',air_flow:'actual',compressor_power:'power',water_flow:'water',condenser_water_out:'out',return:'back'};
     const state=(value,unit)=>({state:String(value),attributes:{unit_of_measurement:unit}});
-    const states={extract:state(21,'°C'),discharge:state(-3,'°C'),actual:state(180,'m³/h'),power:state(950,'W'),water:state(10,'l/min'),out:state(35,'°C'),back:state(30,'°C')};
-    const run=(value,unit)=>calculateHeat({...states,[entities.reference_air_flow]:state(value,unit)},entities);
-    const registry=[{platform:'myuplink',device_id:'pump',entity_id:entities.reference_air_flow,unique_id:'device-new-id'},{platform:'myuplink',device_id:'other',entity_id:'sensor.other_reference_air_speed_sensor',unique_id:'other-43124'}];
-    return {found:discoverEntities(registry,'pump').entities.reference_air_flow,valid:run(210,'M3/h'),litres:run(210/3.6,'l/s'),unitless:run(210,''),percent:run(60,'%'),velocity:run(2,'m/s'),negative:run(-1,'m³/h'),missing:run('unavailable','m³/h')};
+    const entities={compressor_frequency:'f',condenser_water_out:'bt12',reference_air_flow:'ref',air_flow:'air',exhaust_air:'extract',leaving_air:'discharge',water_flow:'bad_flow',return:'bad_return',compressor_power:'unused_power',heater_power:'heater'};
+    const base={f:state(50,'Hz'),bt12:state(45,'°C'),ref:state(180,'M3/h'),air:state(150,'m³/h'),extract:state(21,'°C'),discharge:state(-3,'°C')};
+    const run=changes=>calculateHeat({...base,...changes},entities);
+    const registry=[{platform:'myuplink',device_id:'pump',entity_id:'sensor.vp_reference_air_speed_sensor',unique_id:'device-new-id'},{platform:'myuplink',device_id:'pump',entity_id:'sensor.vp_condenser_out_bt12',unique_id:'device-new-bt12-id'},{platform:'myuplink',device_id:'pump',entity_id:'sensor.vp_current_compressor_frequency',unique_id:'device-new-frequency-id'}];
+    return {normal:run({}),warmer:run({bt12:state(55,'°C')}),cooler:run({bt12:state(35,'°C')}),fahrenheit:run({bt12:state(113,'°F')}),litres:run({ref:state(50,'l/s')}),off:run({f:state(0,'Hz')}),badFrequency:run({f:state(-1,'Hz')}),wrongFrequencyUnit:run({f:state(50,'rpm')}),blank:run({f:state('','Hz')}),missingBT12:run({bt12:state('unavailable','°C')}),badModel:run({bt12:state(-100,'°C')}),wrongFlowUnit:run({ref:state(60,'%'),air:state('unavailable','m³/h')}),measuredFallback:run({ref:state('unavailable','m³/h')}),reversedAir:run({discharge:state(30,'°C')}),missing:calculateHeat({},entities),corrupt:run({bad_flow:state(999999,'l/min'),bad_return:state(-999,'°C'),unused_power:state(9999,'kW'),heater:state(6,'kW')}),found:discoverEntities(registry,'pump').entities};
   });
-  assert.equal(referenceCases.found,'sensor.vp_reference_air_speed_sensor');
-  assert.ok(Math.abs(referenceCases.valid.qEvaporator-1.69008)<1e-10);
-  assert.equal(referenceCases.valid.evaporatorMethod,'reference-sensible');
-  assert.ok(Math.abs(referenceCases.litres.qEvaporator-referenceCases.valid.qEvaporator)<1e-10);
-  for(const key of ['unitless','percent','velocity','negative','missing']) assert.equal(referenceCases[key].evaporatorMethod,'balance',key);
-  const energyCases=await page.evaluate(async()=>{
-    const {powerFromEnergy,calculateHeat,discoverEntities}=await import('/dist/nibe-f750-card.js');
-    const now=Date.now(),row=(seconds,value,unit='kWh')=>({s:String(value),a:{unit_of_measurement:unit},lu:(now-seconds*1000)/1000});
-    const run=rows=>powerFromEnergy(rows,now);
-    return {valid:run([row(601,10),row(1,10.2)]),wh:run([row(601,10000,'Wh'),row(1,10200,'Wh')]),reset:run([row(601,10),row(300,0),row(1,1)]),unitless:run([row(601,10,''),row(1,11,'')]),hours:run([row(601,10,'h'),row(1,11,'h')]),stale:run([row(900,10),row(300,11)]),short:run([row(120,10),row(1,11)]),gap:run([row(601,10),row(300,'unavailable'),row(1,11)]),flat:run([row(601,10),row(1,10)]),averageHeat:calculateHeat({}, {}, {power:1.2,minutes:10}),found:discoverEntities([{platform:'myuplink',device_id:'pump',entity_id:'sensor.energy',unique_id:'renamed-device-43144'}],'pump').entities};
-  });
-  assert.ok(Math.abs(energyCases.valid.power-1.2)<1e-10);
-  assert.equal(energyCases.valid.minutes,10);
-  assert.ok(Math.abs(energyCases.wh.power-energyCases.valid.power)<1e-10);
-  assert.equal(energyCases.wh.minutes,energyCases.valid.minutes);
-  for(const key of ['reset','unitless','hours','stale','short','gap']) assert.equal(energyCases[key],null,key);
-  assert.equal(energyCases.flat.power,0);
-  assert.equal(energyCases.averageHeat.compressorMethod,'energy-average');
-  assert.equal(energyCases.averageHeat.evaporatorMethod,null);
-  assert.equal(energyCases.found.compressor_energy,'sensor.energy');
+  assert.ok(Math.abs(cases.normal.compressor-.805)<1e-10);
+  assert.ok(Math.abs(cases.warmer.compressor-.909)<1e-10);
+  assert.ok(Math.abs(cases.cooler.compressor-.701)<1e-10);
+  assert.ok(Math.abs(cases.normal.qEvaporator-1.44864)<1e-10);
+  assert.ok(Math.abs(cases.normal.qCondenser-2.25364)<1e-10);
+  assert.equal(cases.normal.compressorMethod,'frequency-bt12');
+  assert.equal(cases.normal.evaporatorMethod,'reference-sensible');
+  assert.deepEqual(cases.fahrenheit,cases.normal);
+  assert.ok(Math.abs(cases.litres.qEvaporator-cases.normal.qEvaporator)<1e-10);
+  assert.equal(cases.off.compressor,0);
+  for(const key of ['badFrequency','wrongFrequencyUnit','blank','missingBT12','badModel','missing']) {
+    assert.equal(cases[key].compressor,null,key);
+    assert.equal(cases[key].qCondenser,null,key);
+  }
+  assert.equal(cases.wrongFlowUnit.qEvaporator,null);
+  assert.equal(cases.wrongFlowUnit.qCondenser,null);
+  assert.equal(cases.reversedAir.qEvaporator,null);
+  assert.equal(cases.reversedAir.qCondenser,null);
+  assert.equal(cases.measuredFallback.evaporatorMethod,'sensible');
+  assert.deepEqual(cases.corrupt,cases.normal);
+  assert.equal(cases.found.reference_air_flow,'sensor.vp_reference_air_speed_sensor');
+  assert.equal(cases.found.condenser_water_out,'sensor.vp_condenser_out_bt12');
+  assert.equal(cases.found.compressor_frequency,'sensor.vp_current_compressor_frequency');
   // Keep the requested light palette even when the surrounding HA theme is dark.
   await page.evaluate(()=>document.body.style.setProperty('--primary-text-color','#fff'));
   assert.equal(await card.locator('ha-card').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(255, 255, 255)');
@@ -158,19 +140,16 @@ try {
   await card.getByRole('button',{name:'Refresh discovery'}).click();
   await card.getByText(/Discovery failed/).waitFor();
   await page.evaluate(()=>{
-    const c=document.querySelector('nibe-f750-card'),now=Date.now();window.historyRequests=[];
-    c.hass={states:{'sensor.energy':{state:'10.2',attributes:{unit_of_measurement:'kWh'}}},callWS:async request=>{
-      window.historyRequests.push(request);
-      return {'sensor.energy':[{s:'10',a:{unit_of_measurement:'kWh'},lu:(now-601000)/1000},{s:'10.2',a:{unit_of_measurement:'kWh'},lu:(now-1000)/1000}]};
-    }};
-    c.setConfig({entities:{compressor_energy:'sensor.energy'}});
+    const c=document.querySelector('nibe-f750-card');
+    const state=(value,unit)=>({state:String(value),attributes:{unit_of_measurement:unit}});
+    c.setConfig({entities:{compressor_frequency:'f',condenser_water_out:'bt12',reference_air_flow:'ref',exhaust_air:'extract',leaving_air:'discharge'}});
+    c.hass={states:{f:state(50,'Hz'),bt12:state(45,'°C'),ref:state(180,'M3/h'),extract:state(21,'°C'),discharge:state(-3,'°C')},callWS:async()=>{throw new Error('No history calls are needed');}};
   });
-  await card.getByText('Compressor · 10 min energy average').waitFor();
-  assert.match(await card.locator('.heat-summary').textContent(),/P avg ≈ 1.2 kW/);
-  assert.equal(await page.evaluate(()=>window.historyRequests.at(-1).type),'history/history_during_period');
-  const requestCount=await page.evaluate(()=>window.historyRequests.length);
-  await card.evaluate(c=>c.hass=c._hass);
-  assert.equal(await page.evaluate(()=>window.historyRequests.length),requestCount);
+  await card.getByText('Compressor · frequency / BT12 estimate').waitFor();
+  assert.match(await card.locator('.heat-summary').textContent(),/P est ≈ 0.8 kW/);
+  assert.match(await card.locator('.heat-summary').textContent(),/Q ≈ 2.25 kW/);
+  await card.evaluate(c=>{c.hass={...c._hass,states:{...c._hass.states,f:{state:'100',attributes:{unit_of_measurement:'Hz'}}}};});
+  assert.match(await card.locator('.heat-summary').textContent(),/P est ≈ 1.61 kW/);
   assert.deepEqual(errors,[]);
   console.log('PASS: diagrams, services, bounds, cancellation, errors, mobile layout, renamed entity discovery, disabled/unrelated filtering, device selection and discovery errors.');
 } finally { await browser.close(); }

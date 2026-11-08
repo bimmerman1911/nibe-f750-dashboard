@@ -12,6 +12,8 @@ entities:
   leaving_air: sensor.your_f750_discharge_air
   evaporator: sensor.your_f750_evaporator
   condenser: sensor.your_f750_condenser
+  condenser_water_out: sensor.your_f750_condenser_water_out_bt12
+  reference_air_flow: sensor.your_f750_reference_air_speed_sensor
   compressor_frequency: sensor.your_f750_compressor_frequency
   heater_power: sensor.your_f750_auxiliary_power
   operation: sensor.your_f750_operation

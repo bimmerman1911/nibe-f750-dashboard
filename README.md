@@ -10,7 +10,7 @@ A Home Assistant custom Lovelace card for a NIBE F750 connected through **Home A
 - One combined refrigerant and hydraulic schematic with mapped temperatures and a shared condenser heat exchanger. Refrigerant and water paths stay separate. Moving markers indicate compressor operation only; water flow and branch selection are not inferred. On narrow cards and iPhone portrait screens, the schematic automatically becomes a vertical layout with heat recovery above heat distribution; no horizontal scrolling.
 - Manual heating adjustment and hot-water mode through mapped `number` / `select` entities. Values and limits come from Home Assistant. Every write asks for confirmation and reports service errors.
 - Automatic discovery by myUplink parameter ID, with a device-scoped measurement-name fallback for API variations (including `sensor.vp_current_compressor_frequency`). Renamed entities still match stable IDs or original names. No manual sensor list required.
-- Diagram annotations show current compressor P when exposed, or average P calculated from a compressor-only kWh counter and recorder history, plus estimated evaporator/condenser Q in kW when their inputs are available. See [heat calculations](docs/heat-calculations.md).
+- Diagram annotations show compressor P estimated with the supplied frequency/BT12 formula, sensible evaporator Q from reference airflow, and condenser Q derived as their sum. Corrupt water-flow readings are excluded. See [heat calculations](docs/heat-calculations.md).
 - Missing entities show unavailable values. No guessed sensor IDs or fabricated live COP.
 - Interactive standalone demo with clearly labeled sample data.
 
@@ -19,7 +19,7 @@ A Home Assistant custom Lovelace card for a NIBE F750 connected through **Home A
 1. Set up [the built-in myUplink integration](https://www.home-assistant.io/integrations/myuplink/) under **Settings → Devices & services**. Connect your F750 to your myUplink account first. Enter OAuth credentials in Home Assistant, never in this card or the repository.
 2. Available data and writable controls depend on the equipment, firmware, API and subscription. Some entities may need enabling. myUplink normally updates every 60 seconds; this is a cloud dashboard, not real-time telemetry.
 3. Copy `dist/nibe-f750-card.js` to `/config/www/nibe-f750-card.js`.
-4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.7.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
+4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.8.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
 5. Add a manual dashboard card with just:
 
 ```yaml
@@ -47,9 +47,7 @@ Manual mapping is an optional advanced override: providing `entities:` replaces 
 | `heater_power` | Auxiliary electric heater power |
 | `electrical_power`, `cop` | Optional measured input power and separately calculated/measured COP |
 | `operation` | Reported operating mode |
-| `compressor_power` | Optional current inverter-to-compressor electrical input, W or kW |
-| `compressor_energy` | Optional compressor-only electrical energy counter (Wh/kWh), used with recorder history to calculate average P |
-| `water_flow`, `condenser_water_out` | BF1 condenser water flow and BT12 outlet temperature, used with BT3 return for Q |
+| `condenser_water_out` | BT12 water outlet temperature, used with actual compressor frequency for estimated P |
 | `air_flow` | BS1 airflow with volume/time units, for the sensible-only evaporator estimate |
 | `reference_air_flow` | Automatically discovers `sensor.vp_reference_air_speed_sensor` and equivalents; takes precedence for a clearly labeled reference-airflow sensible evaporator Q estimate |
 
