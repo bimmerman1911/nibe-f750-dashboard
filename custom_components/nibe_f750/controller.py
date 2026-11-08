@@ -8,6 +8,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 from .adaptive import ThermalLearner
+from .offset import OffsetLearner
 from .accounting import Accounting
 from .supervisor import request as adaptive_request
 from .engine import restore_dhw, calculate, fresh, number, SUPPLY, REQUIRED, PRIORITY, TELEMETRY
@@ -46,10 +47,13 @@ class Controller:
         self.decision_log = []
         self.learner = ThermalLearner(getattr(predictor,'options',None))
         self.saved_learning_revision = 0
+        self.offset_learner = OffsetLearner()
+        self.offset_store = Store(hass,1,DOMAIN+'.offset_response')
         self.control = {'mode':'Thermostat fallback','reason':'Waiting for prices and weather.'}
 
     async def async_start(self):
         self.accounting.restore(await self.accounting_store.async_load())
+        self.offset_learner.restore(await self.offset_store.async_load())
         learning = await self.learning_store.async_load()
         if learning and not self.learner.restore(learning):
             _LOGGER.warning('Invalid adaptive model data; restarting learning from initial parameters')
@@ -104,6 +108,8 @@ class Controller:
             self.learner = ThermalLearner(getattr(self.predictor,'options',None))
             await self.learning_store.async_save(self.learner.dump())
             self.saved_learning_revision = 0
+            self.offset_learner = OffsetLearner()
+            await self.offset_store.async_save(self.offset_learner.dump())
             if self.predictor:
                 self.predictor.last_refresh = None
         await self.async_tick()
@@ -144,6 +150,10 @@ class Controller:
             self.last_sample = now
         try:
             self.learner.update(states,now,dt_util.now().hour)
+            revision=self.offset_learner.revision
+            self.offset_learner.update(states,now,self.learner.prior['compressor_heat_kw'])
+            if revision!=self.offset_learner.revision:
+                await self.offset_store.async_save(self.offset_learner.dump())
             if self.learner.revision != self.saved_learning_revision:
                 await self.learning_store.async_save(self.learner.dump())
                 self.saved_learning_revision = self.learner.revision
@@ -153,6 +163,7 @@ class Controller:
             try:
                 self.predictor.adaptive_model = self.learner.parameters()
                 self.predictor.learning = self.learner.diagnostics()
+                self.predictor.offset_response = self.offset_learner.parameters()
                 self.forecast = await asyncio.wait_for(self.predictor.async_update(states, now), timeout=30)
                 generated = self.forecast.get('generated_at')
                 if generated is not None and generated != self.last_prediction:

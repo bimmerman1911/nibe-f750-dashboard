@@ -72,6 +72,8 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
             'sensor.vp_hot_water_top_bt7':state('sensor.vp_hot_water_top_bt7',49,{}),
             'sensor.vp_hot_water_charging_bt6':state('sensor.vp_hot_water_charging_bt6',49,{}),
             'sensor.vp_max_compressor_frequency':state('sensor.vp_max_compressor_frequency',84,{})})
+        for id,value in {'sensor.vp_degree_minutes_2':-120,'sensor.vp_current_compressor_frequency':42,'sensor.vp_current_outd_temp_bt1':0,'sensor.vp_power_internal_add_heat':0}.items():
+            states[id]=state(id,value,{})
         calls=[]
         async def call(domain,service,data,**kwargs):
             calls.append((domain,service))

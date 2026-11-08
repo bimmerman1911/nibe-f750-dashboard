@@ -47,17 +47,12 @@ def calculate(states, now, hour, persistent_shortfall=False, control=None):
     def value(entity):
         state = states.get(entity)
         return number(state.state) if state else None
-    p = value(PRICE)
-    outside = value('sensor.vp_average_outdoor_temp_bt1')
-    extract = value('sensor.vp_exhaust_air_bt20')
-    attrs = states[PRICE].attributes if states.get(PRICE) else {}
-    target1 = 20 if (None in (p, outside, extract) or attrs.get('low_price') is True
-                     or p < 1.5 or outside < 2 or extract < 18) else 19
+    target1 = 20
     if control is not None:
         target1 = float(control['target_c'])
     target2 = min(math.ceil(r2), target1)
     e1, e2 = target1-r1, target2-r2
-    next1 = current1 + (1 if e1 > .3 else -1 if e1 < -.3 else 0)
+    next1 = control['offset_c1'] if control is not None and 'offset_c1' in control else current1 + (1 if e1 > .3 else -1 if e1 < -.3 else 0)
     heating = states.get(PRIORITY) and states[PRIORITY].state == 'Heating'
     water_valid = all(fresh(states.get(e), now) for e in (SUPPLY, REQUIRED, PRIORITY))
     water_valid = water_valid and value(SUPPLY) is not None and value(REQUIRED) is not None

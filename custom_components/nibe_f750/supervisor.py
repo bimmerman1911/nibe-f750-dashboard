@@ -1,5 +1,5 @@
 """Translate the current planned interval into native, bounded control targets."""
-from .engine import ROOM1, ROOM2, fresh, number
+from .engine import C1, ROOM1, ROOM2, fresh, number
 
 
 def request(forecast, states, now, model):
@@ -18,21 +18,28 @@ def request(forecast, states, now, model):
     tank=sum(water)/2
     lo,hi,target=(model[k] for k in ('room_min_c','room_max_c','room_target_c'))
     horizon=[s for s in steps if now <= s['end'] <= now+3600]
-    # Measured room comfort overrides a coast segment; average forecasts cannot
-    # justify allowing the colder room to drift below its own minimum.
-    if min(rooms) < lo+.3:
-        desired=target
-        reason='Restoring indoor comfort'
-    elif max(rooms) > hi:
-        desired=lo
-        reason='Letting stored warmth cover demand'
-    elif current['action']=='heat':
-        predicted=max([target]+[s['room'] for s in horizon])
-        desired=min(hi,max(target,predicted+.2))
-        reason='Heating ahead of future demand and prices'
-    else:
-        desired=lo
-        reason='Using stored warmth while heating is deferred'
+    offset=number(current.get('offset'))
+    if offset is None:
+        return None
+    degree=states.get('sensor.vp_degree_minutes_2')
+    if not fresh(degree,now) or number(degree.state) is None:
+        return None
+    current_offset=number(states[C1].state) if fresh(states.get(C1),now) else None
+    if current_offset is None:
+        return None
+    # Reconcile a cached plan with actual settings and current room comfort.
+    increment=number(states[C1].attributes.get('step')) or 1.
+    if min(rooms)<lo:
+        offset=current_offset+increment
+    elif max(rooms)>hi:
+        offset=current_offset-increment
+    offset=max(current_offset-increment,min(current_offset+increment,offset))
+    lower,upper=(number(states[C1].attributes.get(k)) for k in ('min','max'))
+    if lower is None or upper is None:
+        return None
+    offset=max(lower,min(upper,offset))
+    desired=target
+    reason='Optimising heating offset from prices, weather and delayed heat response'
     # Economy may produce essentially no DHW. Do not count a future charge
     # when checking whether deferral is possible until the next control cycle.
     hold_end=now+1800
@@ -58,5 +65,5 @@ def request(forecast, states, now, model):
     else:
         dhw='Economy'
         dhw_reason='Charging deferred; stored hot water covers expected demand'
-    return {'target_c':round(desired,2),'dhw':dhw,'action':current['action'],
+    return {'offset_c1':offset,'target_c':round(desired,2),'dhw':dhw,'action':current['action'],
             'reason':reason,'dhw_reason':dhw_reason,'dhw_action':'Charge enabled' if dhw=='Normal' else 'Deferred','mode':'Adaptive','generated_at':now}

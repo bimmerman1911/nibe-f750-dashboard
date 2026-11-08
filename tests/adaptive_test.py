@@ -15,7 +15,7 @@ def states_at(t,room=20.,outdoor=5.,q=2.1,tank=49.,mode='Heating'):
     values={engine.ROOM1:room+.1,engine.ROOM2:room-.1,engine.C1:0,engine.C2:0,
       adaptive.FREQUENCY:q/4.2*84,adaptive.MAXIMUM:84,adaptive.HEATER:0,
       engine.PRIORITY:mode,'sensor.vp_current_outd_temp_bt1':outdoor,
-      engine.SUPPLY:36,engine.REQUIRED:34,engine.DHW:'Normal',
+      'sensor.vp_degree_minutes_2':-120,engine.SUPPLY:36,engine.REQUIRED:34,engine.DHW:'Normal',
       adaptive.TANK[0]:tank,adaptive.TANK[1]:tank}
     return {e:SimpleNamespace(entity_id=e,state=str(v),attributes={'min':-10,'max':10,'options':['Normal','Economy']},
              last_reported=datetime.fromtimestamp(t,timezone.utc)) for e,v in values.items()}
@@ -97,15 +97,17 @@ class LearningTests(unittest.TestCase):
 class MappingTests(unittest.TestCase):
     def forecast(self,action='heat'):
         return {'generated_at':BASE,'model':predictive.DEFAULTS,'steps':[
-            {'start':BASE,'end':BASE+900,'action':'off','room':20.,'water':49.},
-            {'start':BASE+900,'end':BASE+1800,'action':action,'room':20.2,'water':49.}]}
+            {'start':BASE,'end':BASE+900,'action':'off','offset':-1,'room':20.,'water':49.},
+            {'start':BASE+900,'end':BASE+1800,'action':action,'offset':1,'room':20.2,'water':49.}]}
 
     def test_live_interval_drives_targets_and_dhw(self):
         states=states_at(BASE+960,20.,q=2.1)
         value=supervisor.request(self.forecast(),states,BASE+960,predictive.DEFAULTS)
-        self.assertGreater(value['target_c'],20)
+        self.assertEqual(value['target_c'],20)
+        self.assertEqual(value['offset_c1'],1)
         before=supervisor.request(self.forecast(),states_at(BASE,20.),BASE,predictive.DEFAULTS)
-        self.assertEqual(before['target_c'],19)
+        self.assertEqual(before['target_c'],20)
+        self.assertEqual(before['offset_c1'],-1)
         dhw=supervisor.request(self.forecast('dhw'),states,BASE+960,predictive.DEFAULTS)
         self.assertEqual(dhw['dhw'],'Normal')
         self.assertEqual(value['mode'],'Adaptive')
@@ -146,19 +148,20 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         Store.saved=None;Store.other={}
         hass=Fixture()
         hass.time=BASE
+        hass.states.values['sensor.vp_degree_minutes_2']='-120'
         hass.states.values.update({engine.ROOM1:'20',engine.ROOM2:'20',engine.C1:'0',engine.C2:'0',engine.DHW:'Normal'})
         class Predictor:
             options={}
             async def async_update(self,states,now):
                 return {'status':'Adaptive schedule','generated_at':now,'initial_room':20.,'initial_water':49.,
                         'model':predictive.DEFAULTS,'steps':[{'start':now,'end':now+900,'action':'off',
-                        'room':20.,'water':49.,'hz':0.,'inline_kw':0.}]}
+                        'room':20.,'water':49.,'offset':-1,'hz':0.,'inline_kw':0.}]}
         # These tank entities are needed by the real mapper.
         hass.states.values.update({e:'49' for e in adaptive.TANK})
         controller=runtime.Controller(hass,clock=lambda:hass.time,predictor=Predictor())
         await controller.async_start()
         self.assertEqual(controller.control['mode'],'Adaptive')
-        self.assertEqual(controller.targets,[19,19])
+        self.assertEqual(controller.targets,[20,20])
         calls={data['entity_id']:data for _,_,_,data in hass.calls}
         self.assertEqual(calls[engine.C1]['value'],-1)
         self.assertEqual(calls[engine.DHW]['option'],'Economy')
@@ -191,20 +194,23 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(controller.control['mode'],'Adaptive')
         self.assertAlmostEqual(controller.forecast['model']['heat_loss_kw_per_k'],.15)
         self.assertEqual(controller.forecast['learning']['windows'],10)
-        self.assertGreater(len(hass.calls),0)
+        self.assertIn('offset_c1',controller.control)
+        self.assertEqual(controller.control['target_c'],20)
+        self.assertTrue(all('offset' in s for s in controller.forecast['steps']))
         self.assertTrue(all(domain in ('number','select') for _,domain,_,_ in hass.calls))
         self.assertEqual(controller.decision_log[-1]['control']['mode'],'Adaptive')
 
     async def test_adaptive_targets_keep_the_rolling_native_write_budget(self):
         Store.saved=None;Store.other={}
         hass=Fixture();hass.time=BASE
+        hass.states.values['sensor.vp_degree_minutes_2']='-120'
         hass.states.values.update({engine.ROOM1:'20',engine.ROOM2:'20',**{e:'49' for e in adaptive.TANK}})
         class Predictor:
             options={}
             async def async_update(self,states,now):
                 return {'status':'Adaptive schedule','generated_at':now,'initial_room':20.,'initial_water':49.,
                         'model':predictive.DEFAULTS,'steps':[{'start':now,'end':now+900,'action':'off',
-                        'room':20.,'water':49.,'hz':0.,'inline_kw':0.}]}
+                        'room':20.,'water':49.,'offset':-1,'hz':0.,'inline_kw':0.}]}
         controller=runtime.Controller(hass,clock=lambda:hass.time,predictor=Predictor())
         await controller.async_start()
         start=hass.time
@@ -212,7 +218,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             hass.time=start+minute*60
             await controller.async_tick()
         self.assertEqual(controller.control['mode'],'Adaptive')
-        self.assertGreater(len(hass.calls),9)
+        self.assertGreater(len(hass.calls),0)
         for time,*_ in hass.calls:
             self.assertLessEqual(sum(time<=c[0]<time+900 for c in hass.calls),3)
 

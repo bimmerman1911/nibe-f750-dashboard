@@ -4,6 +4,7 @@ import asyncio
 from homeassistant.util import dt as dt_util
 from .engine import ROOM1, ROOM2, number, fresh, PRICE
 from .predictive import prices, timeline, plan, DEFAULTS
+from .offset import plan_offsets
 
 
 class Predictor:
@@ -14,6 +15,7 @@ class Predictor:
         self.retry_after=900
         self.adaptive_model={}
         self.learning={}
+        self.offset_response={}
         self.result={'status':'Waiting for forecast','message':'Loading prices and hourly weather.', 'steps':[]}
 
     async def async_update(self, states, now):
@@ -107,7 +109,16 @@ class Predictor:
             if bt12 and fresh(bt12,now) and number(bt12.state) is not None:
                 model['dhw_supply_c' if model['initial_mode']=='dhw' else 'supply_c']=float(bt12.state)
             # Pure model evaluation stays off HA's event loop.
-            result=await self.hass.async_add_executor_job(lambda:plan(slots,room,tank,max_hz,model,min_hz=min_hz))
+            def evaluate():
+                result=plan(slots,room,tank,max_hz,model,min_hz=min_hz)
+                result.update(initial_room=room,initial_water=tank)
+                if result.get('steps'):
+                    offset_plan=plan_offsets(result,states,now,self.offset_response,min_hz,max_hz)
+                    if offset_plan is None:
+                        return {**result,'steps':[],'message':'Offset planning needs fresh degree minutes, supply and control readings.'}
+                    return offset_plan
+                return result
+            result=await self.hass.async_add_executor_job(evaluate)
             self.result={**result,'generated_at':now,'weather_entity':weather_id,
                          'tomorrow_unavailable':unpublished,'currency':'SEK',
                          'initial_room':room,'initial_water':tank,'learning':self.learning,

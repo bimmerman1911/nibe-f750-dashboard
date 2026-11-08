@@ -6,6 +6,7 @@ async def async_get_config_entry_diagnostics(hass, entry):
     controller = hass.data[DOMAIN][entry.entry_id]
     return {'status':controller.status, 'control':controller.control,
             'learning':controller.learner.diagnostics(),
+            'offset_response':controller.offset_learner.dump(),
             'targets':controller.targets, 'write_timestamps':{
                 k:controller.data[k] for k in ('last_cycle','last_attempt')},
             'forecast_summary':{k:controller.forecast.get(k) for k in

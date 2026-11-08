@@ -41,13 +41,21 @@ Standard storage-mode dashboard resources are registered automatically, includin
 - Learns cooling/heating response and heat delay from actual temperatures and heat-pump operation. Parameters persist across restarts.
 - Learns an hourly hot-water demand profile and effective tank charging response.
 - Plans heating and DHW using hourly weather and upcoming electricity prices, stored heat, available compressor capacity and estimated auxiliary need.
-- Applies the current schedule through bounded room targets and native heating offsets. For DHW, Normal enables charging and Economy deliberately defers it; a low Economy preset is supported. Data/forecast failure or Pause restores Normal at the next permitted update.
-- Starts from estimates immediately and refines them while operating. It automatically falls back to the previous thermostat policy when forecasts or a feasible plan are unavailable.
+- Applies the current schedule through planned native heating offsets within room comfort bounds. For DHW, Normal enables charging and Economy deliberately defers it; a low Economy preset is supported. Data/forecast failure or Pause restores Normal at the next permitted update.
+- Starts from estimates immediately and refines them while operating. It automatically falls back to fixed-20°C thermostat control when forecasts or a feasible plan are unavailable.
 - Keeps the established write cadence: changed settings only, at most three setting attempts per rolling 15 minutes, with persisted timestamps. Native NIBE control owns actual compressor/heater operation, defrost and hygiene.
 
 The card shows **Adaptive control** or **Temperature control** (fallback), the current targets, price/schedule outlook and learning progress. Circuit dependencies remain fixed internal constraints. Learning state is not an enable/disable gate.
 
 [Model, configuration, diagnostics and limitations](docs/adaptive-control.md). This is an active first adaptive supervisor; it does not claim metered COP, perfect prediction or globally optimal cost. No GPU, AI subscription or direct HA access is needed for local learning.
+
+## Direct offset planning (v0.19)
+
+Adaptive control now searches native heating-offset sequences instead of converting heating/coasting periods into 19/20°C targets. The search predicts supply temperature, degree-minute backlog, compressor/auxiliary demand and delayed room response. Prices, weather and indoor comfort bounds determine which sequence is selected. Room temperature remains a comfort constraint; the normal target stays stable.
+
+The native-response model learns from observed operating data and persists alongside the house model. The existing fixed circuit relationship, DHW reservation and cloud-write cadence remain in place. Missing required offset/degree-minute data uses ordinary 20°C temperature control with Normal DHW, without the old price-triggered 19°C rule. [Operation and modelling assumptions](docs/offset-control.md).
+
+Update through Marketplace, restart HA and refresh the browser. No YAML, activation step or external model service.
 
 ## Cards and calculations
 
