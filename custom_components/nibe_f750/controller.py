@@ -9,7 +9,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 from .adaptive import ThermalLearner
 from .supervisor import request as adaptive_request
-from .engine import calculate, fresh, number, SUPPLY, REQUIRED, PRIORITY, TELEMETRY
+from .engine import restore_dhw, calculate, fresh, number, SUPPLY, REQUIRED, PRIORITY, TELEMETRY
 
 _LOGGER = logging.getLogger(__name__)
 DOMAIN = 'nibe_f750'
@@ -22,7 +22,7 @@ class Controller:
         self.store = Store(hass, 1, DOMAIN + '.control')
         self.forecast_store = Store(hass, 1, DOMAIN + '.predictions')
         self.learning_store = Store(hass, 1, DOMAIN + '.learning')
-        self.data = {'enabled': True, 'last_cycle': 0, 'last_attempt': 0}
+        self.data = {'enabled': True, 'last_cycle': 0, 'last_attempt': 0, 'release_dhw':False}
         self.status = 'Starting'
         self.targets = []
         self.telemetry = {}
@@ -53,8 +53,10 @@ class Controller:
         restored = await self.store.async_load()
         if restored:
             self.data.update({k: restored[k] for k in self.data if k in restored})
+            if 'release_dhw' not in restored and not self.data['enabled']:
+                self.data['release_dhw'] = True
         # Reject corrupt persistent gates rather than silently resetting a budget.
-        if type(self.data['enabled']) is not bool or any(number(self.data[k]) is None for k in ('last_cycle', 'last_attempt')):
+        if type(self.data['enabled']) is not bool or type(self.data['release_dhw']) is not bool or any(number(self.data[k]) is None for k in ('last_cycle', 'last_attempt')):
             raise ValueError('Invalid persisted controller state')
         self.unsubscribe = async_track_time_interval(self.hass, self.async_tick, timedelta(minutes=1))
         await self.async_tick()
@@ -66,6 +68,7 @@ class Controller:
     async def async_enable(self, enabled):
         # Apply pause immediately, including between writes in an active batch.
         self.data['enabled'] = enabled
+        self.data['release_dhw'] = not enabled
         async with self.lock:
             await self.store.async_save(dict(self.data))
         await self.async_tick()
@@ -143,9 +146,6 @@ class Controller:
         if self.hass.services.has_service('script', 'nibe_smart_control_cycle'):
             self.status = 'Legacy backend detected'
             return
-        if not self.data['enabled']:
-            self.status = 'Paused'
-            return
         water = all(fresh(states.get(e), now) for e in (SUPPLY, REQUIRED, PRIORITY))
         short = water and states[PRIORITY].state == 'Heating' and number(states[SUPPLY].state) is not None and number(states[REQUIRED].state) is not None and float(states[SUPPLY].state) < float(states[REQUIRED].state)-2
         if short:
@@ -153,15 +153,26 @@ class Controller:
                 self.short_since = now
         else:
             self.short_since = None
-        chosen = adaptive_request(self.forecast,states,now,self.forecast.get('model',{})) if self.forecast.get('steps') else None
-        self.control = chosen or {'mode':'Thermostat fallback', 'reason':self.forecast.get('message','Prices/weather unavailable; using temperature control.')}
-        result = calculate(states, now, dt_util.now().hour,
-            self.short_since is not None and now-self.short_since >= 900, control=chosen)
-        if result is None:
-            self.status = 'Waiting for readings'
-            return
-        self.targets = result['targets']
-        self.status = 'Write failed' if self.write_failed else 'Running'
+        if not self.data['enabled']:
+            native_dhw = states.get('select.vp_comfort_mode')
+            if self.data['release_dhw'] and native_dhw and native_dhw.state in ('Normal','Lux'):
+                self.data['release_dhw'] = False
+                await self.store.async_save(dict(self.data))
+            self.status = 'Paused'
+            self.control = {'mode':'Paused','dhw':'Normal','dhw_action':'Restoring Normal' if self.data['release_dhw'] and restore_dhw(states) else 'Native/manual',
+                            'reason':'Restoring Normal hot-water operation.' if self.data['release_dhw'] else 'Paused; hot water is under native/manual control.'}
+            result = {'targets':self.targets, 'writes':restore_dhw(states) if self.data['release_dhw'] else []}
+        else:
+            chosen = adaptive_request(self.forecast,states,now,self.forecast.get('model',{})) if self.forecast.get('steps') else None
+            self.control = chosen or {'mode':'Thermostat fallback', 'reason':self.forecast.get('message','Prices/weather unavailable; using temperature control.')}
+            result = calculate(states, now, dt_util.now().hour,
+                self.short_since is not None and now-self.short_since >= 900, control=chosen)
+            if result is None:
+                result = {'targets':[], 'writes':restore_dhw(states)}
+                self.status = 'Waiting for readings'
+            else:
+                self.status = 'Write failed' if self.write_failed else 'Running'
+            self.targets = result['targets']
         if now-float(self.data['last_cycle']) < 902 or now-float(self.data['last_attempt']) < 902:
             return
         self.data['last_cycle'] = now
@@ -169,13 +180,17 @@ class Controller:
         failed = False
         attempts = []
         for entity, value in result['writes']:
-            if self.stopping or not self.data['enabled']:
+            if self.stopping:
                 break
+            if not self.data['enabled'] and (entity != 'select.vp_comfort_mode' or value != 'Normal'):
+                continue
             self.data['last_attempt'] = self.clock()
             # A failed durable reservation must prevent the cloud call.
             await self.store.async_save(dict(self.data))
-            if self.stopping or not self.data['enabled']:
+            if self.stopping:
                 break
+            if not self.data['enabled'] and (entity != 'select.vp_comfort_mode' or value != 'Normal'):
+                continue
             domain = entity.split('.')[0]
             try:
                 attempts.append({'entity':entity,'requested':value,'success':False})

@@ -33,12 +33,30 @@ def request(forecast, states, now, model):
     else:
         desired=lo
         reason='Using stored warmth while heating is deferred'
+    # Economy may produce essentially no DHW. Do not count a future charge
+    # when checking whether deferral is possible until the next control cycle.
+    hold_end=now+1800
+    capacity=model.get('tank_capacity_kwh_per_k',.209)
+    profile=model.get('dhw_profile')
+    deferred=tank
+    for slot in steps:
+        duration=max(0.,min(slot['end'],hold_end)-max(slot['start'],now))/3600
+        if duration:
+            draw=profile[slot.get('local_hour',0)] if profile else model.get('dhw_draw_kw',.15)
+            deferred-=(draw+.0015*(deferred-20))*duration/capacity
+    approaching_charge=any(s['action']=='dhw' and now<=s['start']<hold_end for s in steps)
     low_water=min([tank]+[s['water'] for s in horizon])
-    if current['action']=='dhw' or tank < model['tank_min_c']+2 or low_water < model['tank_min_c']+1:
+    charging=states.get('sensor.vp_priority')
+    finish_charge=charging and charging.state=='Hot water' and tank<model['tank_target_c']
+    if (current['action']=='dhw' or approaching_charge or finish_charge
+        or tank < model['tank_min_c']+2 or deferred < model['tank_min_c']+2
+        or low_water < model['tank_min_c']+1):
         dhw='Normal'
-        if current['action']=='dhw':
+        dhw_reason='Charging enabled to build or preserve the hot-water reserve'
+        if current['action']=='dhw' or approaching_charge:
             reason='Preparing hot water ahead of demand'
     else:
         dhw='Economy'
+        dhw_reason='Charging deferred; stored hot water covers expected demand'
     return {'target_c':round(desired,2),'dhw':dhw,'action':current['action'],
-            'reason':reason,'mode':'Adaptive','generated_at':now}
+            'reason':reason,'dhw_reason':dhw_reason,'dhw_action':'Charge enabled' if dhw=='Normal' else 'Deferred','mode':'Adaptive','generated_at':now}

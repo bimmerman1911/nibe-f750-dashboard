@@ -13,7 +13,7 @@ At each control cycle it selects the plan interval containing **the current time
 - Heating periods raise the requested target toward the planned reserve, within the configured maximum.
 - Coast periods lower it toward the configured minimum, using the house's stored warmth.
 - A colder room approaching its minimum overrides a coast request and restores the normal target.
-- DHW preparation, low measured reserve, or a low forecast reserve selects Normal. Otherwise the controller can select Economy, including overnight when the forecast permits it.
+- DHW preparation, low measured reserve, or a low forecast reserve selects Normal. Economy means deliberate deferral, including a preset so low it produces essentially no DHW. A charge planned within the next 30 minutes enables Normal now; the reserve check explicitly projects zero charging over that interval instead of counting future reheating. Existing charging can continue until the model target is reached.
 - The fixed relationship between circuits and the existing supply-temperature feedback remain internal constraints.
 
 Defaults are 19°C minimum, 20°C normal and 20.5°C maximum preheat target. Native curve offsets move by at most one unit per cycle, with the existing 0.3°C room deadband and the entities' native ranges. An offset unit is not a guaranteed one-degree room-temperature change.
@@ -46,9 +46,11 @@ Compressor electrical input uses the owner's empirical frequency/BT12 formula. C
 
 Integration Configure exposes room bounds, model tank bounds and initial loss/storage/capacity estimates. Existing learning is retained when settings change. **Reset NIBE learning**, on the integration's device page, restarts from those estimates. Resetting learning does not reset the cloud-write timestamps or automatically unpause control.
 
-Tank bounds describe the model; native Normal/Economy temperatures and hygiene settings remain NIBE settings. Initial defaults are a 42°C mixed-tank reserve, 48°C model target and up to 52°C planned ceiling. The model does not resolve tank stratification or guarantee shower duration.
+Tank bounds describe the model; native Normal/Economy temperatures and hygiene settings remain NIBE settings. Economy can be set very low to defer production; Normal should be set to the desired charging level. Normal enables native charging subject to the pump’s start/stop thresholds; it is not an unconditional compressor-start command. The integration does not change these preset temperatures. Initial defaults are a 42°C mixed-tank reserve, 48°C model target and up to 52°C planned ceiling. The model does not resolve tank stratification or guarantee shower duration.
 
 Forecast/source failure, stale plans, missing required readings or no feasible schedule automatically selects the existing temperature/DHW policy. Invalid room/offset readings still stop setting dispatch. The UI shows **Adaptive control** when the plan supplies targets and **Temperature control** when fallback supplies them. No operator confirmation is required to resume adaptive operation once data returns.
+
+Forecast failure and invalid required readings restore Normal when the comfort selector is available. Pause also releases deliberate Economy deferral to Normal once, while leaving heating offsets in place. After this release, manual preset choices while paused are respected. This restoration waits for the next permitted setting update and preserves an explicit Lux selection on pause. Removing/unloading the integration stops its callbacks; pause and let Normal apply before uninstalling if DHW is deferred.
 
 The same serialized write path handles every decision. It skips unchanged settings, persists timestamps before and after calls, and limits its setting attempts to the existing cadence (normally about 16 minutes between batches, at most three calls per rolling 15 minutes). A quick restart, Pause/Resume or model reset does not multiply requests. Source forecast/price reads and local learning/recording are not NIBE setting writes. Other controllers, NIBE app actions and client-internal HTTP retries remain outside this controller's budget.
 

@@ -41,7 +41,7 @@ Standard storage-mode dashboard resources are registered automatically, includin
 - Learns cooling/heating response and heat delay from actual temperatures and heat-pump operation. Parameters persist across restarts.
 - Learns an hourly hot-water demand profile and effective tank charging response.
 - Plans heating and DHW using hourly weather and upcoming electricity prices, stored heat, available compressor capacity and estimated auxiliary need.
-- Applies the current schedule through bounded room targets, the two native heating offsets and Normal/Economy DHW mode.
+- Applies the current schedule through bounded room targets and native heating offsets. For DHW, Normal enables charging and Economy deliberately defers it; a low Economy preset is supported. Data/forecast failure or Pause restores Normal at the next permitted update.
 - Starts from estimates immediately and refines them while operating. It automatically falls back to the previous thermostat policy when forecasts or a feasible plan are unavailable.
 - Keeps the established write cadence: changed settings only, at most three setting attempts per rolling 15 minutes, with persisted timestamps. Native NIBE control owns actual compressor/heater operation, defrost and hygiene.
 

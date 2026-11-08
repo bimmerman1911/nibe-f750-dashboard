@@ -161,10 +161,13 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.hass.states.values[engine.ROOM1] = 'unavailable'
         await self.controller.async_start()
         self.assertEqual(self.controller.status, 'Waiting for readings')
-        self.assertEqual(self.hass.calls, [])
+        self.assertEqual([c[3] for c in self.hass.calls],[{'entity_id':engine.DHW,'option':'Normal'}])
         self.hass.states.values[engine.ROOM1] = '20.5'
         await self.controller.async_tick()
-        self.assertEqual(len(self.hass.calls), 3)
+        self.assertEqual(len(self.hass.calls),1)
+        self.hass.time += 903
+        await self.controller.async_tick()
+        self.assertEqual(len(self.hass.calls),4)
 
     async def test_policy_c1_priority_missing_readings_and_dhw(self):
         self.hass.states.values[engine.ROOM1] = '19.1'
@@ -186,7 +189,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
                 self.controller.data['enabled'] = False
         self.controller.store.async_save = save
         await self.controller.async_start()
-        self.assertEqual(self.hass.calls, [])
+        self.assertEqual([c[3] for c in self.hass.calls],[{'entity_id':engine.DHW,'option':'Normal'}])
 
 class SetupTests(unittest.IsolatedAsyncioTestCase):
     async def test_setup_registers_frontend_and_unloads(self):
@@ -218,6 +221,7 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
         Store.saved = None
         Store.other = {}
         hass = Fixture()
+        module.Controller=lambda hass,predictor:runtime.Controller(hass,clock=lambda:hass.time,predictor=predictor)
         resources = Resources()
         hass.data = {'lovelace':SimpleNamespace(resources=resources)}
         paths = []

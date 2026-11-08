@@ -119,6 +119,28 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(result['targets'][0],20)
         self.assertIsNone(supervisor.request(self.forecast(),states,BASE+1300,predictive.DEFAULTS))
 
+    def test_imminent_charge_and_zero_charge_reserve_enable_normal(self):
+        states=states_at(BASE,20.,tank=49.)
+        # Charging starts in 15 minutes: enable now because writes have a cadence.
+        control=supervisor.request(self.forecast('dhw'),states,BASE,predictive.DEFAULTS)
+        self.assertEqual(control['dhw'],'Normal')
+        forecast=self.forecast('off')
+        states=states_at(BASE,20.,tank=45.)
+        model={**predictive.DEFAULTS,'dhw_profile':[2.]*24}
+        control=supervisor.request(forecast,states,BASE,model)
+        self.assertEqual(control['dhw'],'Normal')
+
+    def test_price_only_fallback_never_disables_dhw(self):
+        states=states_at(BASE,20.)
+        states[engine.PRICE]=SimpleNamespace(state='2',attributes={'average':1,'min':.5,'max':2})
+        states['sensor.vp_average_outdoor_temp_bt1']=SimpleNamespace(state='5')
+        states['sensor.vp_exhaust_air_bt20']=SimpleNamespace(state='20')
+        states[engine.DHW].state='Economy'
+        result=engine.calculate(states,BASE,12)
+        self.assertIn((engine.DHW,'Normal'),result['writes'])
+        states[engine.DHW].state='Lux'
+        self.assertEqual(engine.restore_dhw(states),[])
+
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_planner_changes_actual_service_payloads_without_extra_gate(self):
         Store.saved=None;Store.other={}
@@ -193,6 +215,29 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(len(hass.calls),9)
         for time,*_ in hass.calls:
             self.assertLessEqual(sum(time<=c[0]<time+900 for c in hass.calls),3)
+
+    async def test_pause_restores_normal_at_next_permitted_cycle(self):
+        Store.saved=None;Store.other={}
+        hass=Fixture();hass.time=BASE
+        controller=runtime.Controller(hass,clock=lambda:hass.time)
+        await controller.async_start()
+        count=len(hass.calls)
+        await controller.async_enable(False)
+        self.assertEqual(len(hass.calls),count)
+        hass.time+=903
+        await controller.async_tick()
+        self.assertEqual(controller.status,'Paused')
+        self.assertEqual(hass.calls[-1][3],{'entity_id':engine.DHW,'option':'Normal'})
+        self.assertEqual(len(hass.calls),count+1)
+        hass.states.values[engine.DHW]='Normal'
+        hass.time+=1000
+        await controller.async_tick()
+        self.assertEqual(len(hass.calls),count+1)
+        # After releasing deferral once, Pause permits later manual selection.
+        hass.states.values[engine.DHW]='Economy'
+        hass.time+=1000
+        await controller.async_tick()
+        self.assertEqual(len(hass.calls),count+1)
 
     async def test_learning_persists_and_forecast_failure_falls_back(self):
         Store.saved=None;Store.other={}

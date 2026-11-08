@@ -65,10 +65,9 @@ def calculate(states, now, hour, persistent_shortfall=False, control=None):
     increase = bool(heating and water_valid and not shortfall and e1 <= .3)
     next2 = current2 + (-1 if e2 < -.3 or (persistent_shortfall and shortfall and e2 <= .3)
                         else 1 if e2 > .3 and increase else 0)
-    avg, mn, mx = (number(attrs.get(k)) for k in ('average', 'min', 'max'))
-    economy = (6 <= hour < 22 and None not in (p, avg, mn, mx, outside)
-               and p > avg and p > 1.5 and mn > 0 and mx/mn >= 1.3 and outside > 2)
-    comfort = control['dhw'] if control is not None else 'Economy' if economy else 'Normal'
+    # Economy is an intentional DHW deferral preset, not a lower reserve.
+    # Only a valid forecast supervisor may defer; fallback restores Normal.
+    comfort = control['dhw'] if control is not None else 'Normal'
     candidates = [(C1, next1), (C2, next2), (DHW, comfort)]
     writes = []
     for entity, proposed in candidates:
@@ -83,3 +82,11 @@ def calculate(states, now, hour, persistent_shortfall=False, control=None):
             if lo is not None and hi is not None and lo <= proposed <= hi and abs(number(state.state)-proposed) > .01:
                 writes.append((entity, proposed))
     return {'targets': [target1, target2], 'writes': writes, 'shortfall': shortfall}
+
+
+def restore_dhw(states):
+    """Release deliberate deferral; leave an explicit Lux selection alone."""
+    state=states.get(DHW)
+    if state and state.state=='Economy' and 'Normal' in state.attributes.get('options',[]):
+        return [(DHW,'Normal')]
+    return []
