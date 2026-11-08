@@ -203,7 +203,7 @@ if(globalThis.customElements&&!customElements.get('nibe-f750-smart-card')) {
           const point=id=>rows.find(e=>String(e.unique_id).endsWith(`-${id}`))?.entity_id;
           const temp=id=>temperature(this._hass.states[id]);
           const m=this.config.model;
-          this._initial={temps:(m?.zones||[]).map((z,i)=>temp(z.temperature_entity||(i===0?'sensor.ovanvaning_temperature':'sensor.nedervaning_temperature'))),water:(temp(point('40013'))!==null&&temp(point('40014'))!==null)?(temp(point('40013'))+temp(point('40014')))/2:null,running:Number(this._hass.states[point('43136')]?.state)>0,mode:/hot water/i.test(this._hass.states[point('49994')]?.state||'')?'dhw':'heat'};
+          this._initial={temps:(m?.zones||[{},{}]).map((z,i)=>temp(z.temperature_entity||(i===0?'sensor.ovanvaning_temperature':'sensor.nedervaning_temperature'))),water:(temp(point('40013'))!==null&&temp(point('40014'))!==null)?(temp(point('40013'))+temp(point('40014')))/2:null,running:Number(this._hass.states[point('43136')]?.state)>0,mode:/hot water/i.test(this._hass.states[point('49994')]?.state||'')?'dhw':'heat'};
           this._linkedTargets=linkedCircuitTargets(this._hass.states['input_number.set_temp_c1']?.state,temp('sensor.nedervaning_temperature'));
           this._telemetry={targets:['input_number.set_temp_c1','input_number.set_temp_c2'].map(id=>this._hass.states[id]?.state),offsets:['number.vp_heating_offset_climate_system_1','number.vp_heating_offset_climate_system_2'].map(id=>this._hass.states[id]?.state),legacy:['sensor.thermostat_comp_c1','sensor.thermostat_comp_c2'].map(id=>this._hass.states[id]?.state)};
           if(!device)throw Error('Choose the myUplink heat pump.');

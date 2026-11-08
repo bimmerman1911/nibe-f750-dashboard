@@ -48,6 +48,9 @@ try {
   assert.equal(await card.evaluate(c=>c._weather),'weather.smhi_home');
   assert.equal(await card.evaluate(c=>c._price),'sensor.nordpool_kwh_se3_sek_3_10_025');
   assert.ok(await page.evaluate(()=>window.smartCalls.filter(r=>r.type==='call_service').every(r=>r.domain==='weather')));
+  await page.evaluate(()=>document.querySelector('nibe-f750-smart-card').setConfig({type:'custom:nibe-f750-smart-card'}));
+  await page.waitForFunction(()=>!document.querySelector('nibe-f750-smart-card')._busy&&!!document.querySelector('nibe-f750-smart-card')._market);
+  assert.deepEqual(await card.evaluate(c=>c._initial.temps),[20.1,20.1]);
   await page.evaluate(()=>{window.smartHass.callWS=async()=>{throw Error('Forecast connection lost');};});
   await card.getByRole('button',{name:'Refresh'}).click();
   await card.getByText('Forecast connection lost',{exact:true}).waitFor();
