@@ -49,14 +49,23 @@ class AccountingTests(unittest.TestCase):
 
     def test_predicted_history_is_frozen_after_the_interval_starts(self):
         a=accounting.Accounting()
-        def forecast(power):
-            return {'generated_at':BASE,'steps':[{'start':BASE,'end':BASE+900,'compressor_kw':power,'inline_kw':0,'price':1,'action':'heat'}]}
-        a.forecast(forecast(2),BASE-60)
-        a.forecast(forecast(5),BASE+30)
-        self.assertEqual(a.bins[BASE]['predicted_kw'],2)
+        def forecast(power,inline):
+            return {'generated_at':BASE,'steps':[{'start':BASE,'end':BASE+900,'compressor_kw':power,'inline_kw':inline,'price':1,'action':'heat'}]}
+        a.forecast(forecast(2,.5),BASE-60)
+        a.forecast(forecast(5,3),BASE+30)
+        self.assertEqual(a.bins[BASE]['predicted_kw'],2.5)
         restored=accounting.Accounting();restored.restore(copy.deepcopy(a.dump()))
-        self.assertEqual(restored.bins[BASE]['predicted_kw'],2)
+        self.assertEqual(restored.bins[BASE]['predicted_kw'],2.5)
         self.assertIsNone(restored.previous)
+        self.assertEqual(restored.view(BASE+30)['history'][0]['inline_kw'],.5)
+        imported=accounting.Accounting()
+        imported.forecast(forecast(5,3),BASE-60)
+        imported.merge_history(restored,BASE+30)
+        self.assertEqual(imported.view(BASE+30)['history'][0]['inline_kw'],.5)
+        old=copy.deepcopy(a.dump())
+        del old['bins'][str(int(BASE))]['inline_kw']
+        restored.restore(old)
+        self.assertIsNone(restored.view(BASE+30)['history'][0]['inline_kw'])
 
     def test_local_midnight_splits_and_negative_prices(self):
         midnight=datetime(2026,11,5,0,0,tzinfo=accounting.ZoneInfo('Europe/Stockholm')).timestamp()

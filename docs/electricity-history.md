@@ -1,6 +1,6 @@
 # Electricity history and weekly comparison (v0.18)
 
-The Prices & schedule chart spans **12 hours before now and 12 hours after now**. Prices and heating/DHW schedule colours use the left scale (SEK/kWh); two power lines use the right scale (kW). Power points represent 15-minute intervals. Missing readings break the line. The observed line stops at the present; future consumption is a prediction.
+The Prices & schedule chart spans **12 hours before now and 12 hours after now**. Prices and heating/DHW schedule colours use the left scale (SEK/kWh); two power lines use the right scale (kW). Orange price bars mark predicted inline-heater use, with an Inline estimate legend and kW in the tooltip. This includes saved past predictions when their inline component is available. Older history without that component is left unmarked. Power points represent 15-minute intervals. Missing readings break the line. The observed line stops at the present; future consumption is a prediction.
 
 Predictions are saved when issued, updated for future intervals and frozen after an interval begins. Historical predictions are not recalculated using today's model. If no forecast was recorded for a past interval, that part of the prediction line stays empty.
 

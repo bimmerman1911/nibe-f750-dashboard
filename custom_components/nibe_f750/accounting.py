@@ -43,7 +43,7 @@ class Accounting:
             # Once an interval has begun, preserve its as-issued prediction.
             if start>now or 'predicted_kw' not in row:
                 row.update(predicted_kw=s['compressor_kw']+s['inline_kw'],price=s['price'],
-                           action=s['action'],issued_at=result.get('generated_at',now))
+                           inline_kw=s['inline_kw'],action=s['action'],issued_at=result.get('generated_at',now))
         self.revision+=1
 
     def observe(self, states, now, learned, forecast):
@@ -172,7 +172,7 @@ class Accounting:
             current=self.bins.get(t,{})
             merged={**historical,**current}
             if t<=cutoff and 'predicted_kw' in historical:
-                for key in ('predicted_kw','issued_at','action'):
+                for key in ('predicted_kw','inline_kw','issued_at','action'):
                     merged[key]=historical.get(key)
             for key in ('energy','seconds'):
                 if key in historical or key in current:
@@ -193,7 +193,7 @@ class Accounting:
             data=self.days.get(date.isoformat()) if date<=today else None
             week.append({'date':date.isoformat(),'actual':data['actual'] if data else None,
                          'baseline':data['baseline'] if data and data.get('baseline_seconds',0)>=data['seconds']-1e-6 else None,'covered_hours':data['seconds']/3600 if data else 0.})
-        history=[{'start':t,'end':t+900,'price':v.get('price'),'predicted_kw':v.get('predicted_kw'),
+        history=[{'start':t,'end':t+900,'price':v.get('price'),'predicted_kw':v.get('predicted_kw'),'inline_kw':v.get('inline_kw'),
                   'actual_kw':v['energy']/(v['seconds']/3600) if v.get('seconds') else None,
                   'action':v.get('action'),'covered_seconds':v.get('seconds',0)}
                  for t,v in sorted(self.bins.items()) if now-44100<=t<=now+43200]
