@@ -6,18 +6,11 @@ The existing `nibe-f750-card` circuit diagram is unchanged. `nibe-f750-smart-car
 
 ![Smart Control preview](smart-desktop.png)
 
-## Install the new card
+## Install the integrated component
 
-1. In HACS, update/redownload **NIBE F750 Dashboard**, then refresh your browser (or clear its frontend cache). Both cards are now included in the existing `nibe-f750-card.js` resource.
-2. Keep your existing diagram card. Add another manual dashboard card:
+Follow [the HACS Integration installation and migration guide](../README.md#install). Both cards are automatically served by the integration. The old external YAML backend is replaced by the integration's Python controller; remove it during migration.
 
-```yaml
-type: custom:nibe-f750-smart-card
-```
-
-No second JavaScript resource is required. If you previously added `/local/nibe-f750-smart-card.js`, remove that resource to avoid loading an older separate copy. For installations without HACS, replace `/config/www/nibe-f750-card.js` with the latest [`dist/nibe-f750-card.js`](../dist/nibe-f750-card.js) and update its existing resource URL to `/local/nibe-f750-card.js?v=0.12.1`.
-
-The standalone demo is at `/demo/smart.html` when running the repository's preview server. It uses sample prices, temperatures and explicitly illustrative model parameters. It is not connected to a real heat pump.
+The standalone `/demo/smart.html` is illustrative and issues no pump-setting calls.
 
 ## Sources: use Home Assistant integrations
 

@@ -1,0 +1,19 @@
+{
+  "domain": "nibe_f750",
+  "name": "NIBE F750 Smart Control",
+  "codeowners": [
+    "@bimmerman1911"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "frontend",
+    "http",
+    "lovelace",
+    "myuplink"
+  ],
+  "documentation": "https://github.com/bimmerman1911/nibe-f750-dashboard",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/bimmerman1911/nibe-f750-dashboard/issues",
+  "version": "0.15.0"
+}

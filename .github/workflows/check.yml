@@ -13,9 +13,17 @@ jobs:
           python-version: '3.12'
       - run: pip install jinja2 pyyaml
       - run: python tests/control_test.py
+      - run: python tests/integration_test.py
+      - run: python -m compileall -q custom_components/nibe_f750
       - run: npm run check
       - run: npm install --no-save playwright@1.56.1
       - run: npx playwright install --with-deps chromium
       - run: |
           python -m http.server 8080 &
           npm test
+
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master

@@ -1,0 +1,30 @@
+"""Controller status and Recorder telemetry."""
+from datetime import datetime, timezone
+from homeassistant.components.sensor import SensorEntity
+from .controller import DOMAIN
+from .entity import ControllerEntity
+
+
+async def async_setup_entry(hass, entry, async_add_entities):
+    controller = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities([ControlSensor(controller, False), ControlSensor(controller, True)])
+
+
+class ControlSensor(ControllerEntity, SensorEntity):
+    def __init__(self, controller, telemetry):
+        self.telemetry = telemetry
+        super().__init__(controller, 'telemetry' if telemetry else 'status',
+            'NIBE control telemetry' if telemetry else 'NIBE Smart Control status')
+
+    @property
+    def native_value(self):
+        if self.telemetry:
+            return datetime.fromtimestamp(self.controller.last_sample, timezone.utc).isoformat()
+        return self.controller.status
+
+    @property
+    def extra_state_attributes(self):
+        if self.telemetry:
+            return {'readings': self.controller.telemetry}
+        return {'targets': self.controller.targets, 'last_cycle': self.controller.data['last_cycle'],
+                'last_attempt': self.controller.data['last_attempt']}

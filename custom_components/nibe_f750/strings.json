@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "NIBE F750 Smart Control",
+        "description": "Use your existing myUplink entities and automatically install both dashboard cards. Control starts after a 15-minute waiting period. Disable the old thermostat/DHW automations. If migrating, remove the old nibe_f750_trial.yaml package and restart HA first."
+      }
+    },
+    "abort": {
+      "already_configured": "Only one controller can be configured."
+    },
+    "error": {
+      "myuplink_required": "Set up Home Assistant\u2019s built-in myUplink integration first."
+    }
+  },
+  "issues": {
+    "yaml_resource": {
+      "title": "Add the NIBE card module to YAML dashboard resources",
+      "description": "Your dashboard resources use YAML mode. Add /nibe-f750/nibe-f750-card.js as a module resource and remove the previous NIBE card resources. Storage-mode dashboards are configured automatically."
+    }
+  }
+}

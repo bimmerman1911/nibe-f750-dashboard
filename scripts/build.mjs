@@ -9,3 +9,8 @@ const target=new URL('../dist/nibe-f750-card.js',import.meta.url);
 if(process.argv.includes('--check')) {
   if(fs.readFileSync(target,'utf8')!==bundle)throw Error('Run npm run build to update the HACS bundle.');
 } else fs.writeFileSync(target,bundle);
+
+const installed=new URL('../custom_components/nibe_f750/frontend/nibe-f750-card.js',import.meta.url);
+if(process.argv.includes('--check')) {
+  if(fs.readFileSync(installed,'utf8')!==bundle)throw Error('Run npm run build to update the integration frontend.');
+} else fs.writeFileSync(installed,bundle);

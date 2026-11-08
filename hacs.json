@@ -1,5 +1,5 @@
 {
-  "name": "NIBE F750 Dashboard",
-  "render_readme": true,
-  "filename": "nibe-f750-card.js"
+  "name": "NIBE F750 Smart Control",
+  "homeassistant": "2025.1.0",
+  "render_readme": true
 }

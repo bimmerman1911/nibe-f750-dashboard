@@ -1,78 +1,65 @@
-# NIBE F750 Dashboard
+# NIBE F750 Smart Control
 
-A read-only Home Assistant circuit diagram for a NIBE F750 connected through **Home Assistant’s built-in myUplink integration**. No separate API client or credentials.
+One **HACS Integration** installs the background controller and both dashboard cards. It uses Home Assistant's built-in **myUplink** connection. No YAML package, extra credentials, manual JavaScript copying or separate card download is required.
 
-![Dashboard preview](docs/dashboard.png)
+![Circuit diagram](docs/dashboard.png)
 
-## First release
+## Install
 
-- Diagram-only light layout with bold `Q = … kW` / `P = … kW` values, BT sensor markers, red incoming air and blue outgoing air. No header panels or comfort controls. BT1/BT50 appear directly in the diagram.
-- One combined refrigerant and hydraulic schematic with mapped temperatures and a shared condenser heat exchanger. Refrigerant and water paths stay separate. Static arrows show normal direction; animated air, refrigerant and water paths illustrate operation and reported heating/DHW priority. Motion is not a flow measurement. Compact BT sensor markers follow the [manual-based location guide](docs/schematic.md). On narrow cards and iPhone portrait screens, the schematic automatically becomes a vertical layout with heat recovery above heat distribution; no horizontal scrolling.
-- Automatic discovery by myUplink parameter ID, with a device-scoped measurement-name fallback for API variations (including `sensor.vp_current_compressor_frequency`). Renamed entities still match stable IDs or original names. No manual sensor list required.
-- Diagram annotations show compressor P estimated with the supplied frequency/BT12 formula, sensible evaporator Q from reference airflow, and condenser Q derived as their sum. Corrupt water-flow readings are excluded. See [heat calculations](docs/heat-calculations.md).
-- Shower minutes beside the tank: reported duration if exposed, otherwise an approximate temperature-based estimate marked `≈`. Defaults: 180 L tank, 40°C shower, 10°C cold inlet and 10 L/min flow. See [shower estimates](docs/shower-time.md).
-- Missing entities show unavailable values. No guessed sensor IDs or fabricated live COP.
-- Interactive standalone demo with clearly labeled sample data.
-
-## Connect to Home Assistant
-
-1. Set up [the built-in myUplink integration](https://www.home-assistant.io/integrations/myuplink/) under **Settings → Devices & services**. Connect your F750 to your myUplink account first. Enter OAuth credentials in Home Assistant, never in this card or the repository.
-2. Available data and writable controls depend on the equipment, firmware, API and subscription. Some entities may need enabling. myUplink normally updates every 60 seconds; this is a cloud dashboard, not real-time telemetry.
-3. Copy `dist/nibe-f750-card.js` to `/config/www/nibe-f750-card.js`.
-4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.14.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
-5. Add a manual dashboard card with just:
+1. Set up Home Assistant's built-in **myUplink** integration for your F750.
+2. Add `https://github.com/bimmerman1911/nibe-f750-dashboard` to HACS custom repositories with category **Integration**. Install **NIBE F750 Smart Control**.
+3. Restart Home Assistant, then go to **Settings → Devices & services → Add integration → NIBE F750 Smart Control**.
+4. Refresh the browser. The integration automatically registers both dashboard cards. Add either or both:
 
 ```yaml
 type: custom:nibe-f750-card
 ```
 
-The card discovers the built-in myUplink device and readings automatically. If several devices are present, it prefers a uniquely identified F750; otherwise choose a device in the card. Use a full-width panel view or a wide section for the circuit layout. Reload the dashboard after enabling entities. Setup/retry controls appear only when a device must be selected or discovery fails. Registry access must be permitted for your Home Assistant account.
-
-For HACS, add this repository as a custom **Dashboard** repository. `hacs.json` and the distributable file are included; this project is not listed in the default HACS catalog.
-
-For an existing HACS installation, update/redownload the card and refresh your browser. Remove the old `entities:` and `controls:` configuration to enable automatic discovery. [Discovery details and source references](docs/discovery.md).
-
-### Entity mapping
-
-Manual mapping is an optional advanced override: providing `entities:` replaces automatic discovery. See [examples/dashboard.yaml](examples/dashboard.yaml). All `entities` keys are optional. `entities: {}` gives a read-only, unconfigured card. Units are taken from each entity's `unit_of_measurement` when present. Match the sensor's actual meaning; especially distinguish extract/discharge air, refrigerant temperatures and heating-water temperatures. The diagrams are explanatory, not an F750 service schematic and do not model valve positions or domestic-water plumbing in detail.
-
-| Key | Meaning |
-| --- | --- |
-| `outdoor`, `room` | Outdoor and room temperature |
-| `hot_water`, `hot_water_charge` | BT7 tank display and BT6 tank control temperatures, kept separate |
-| `supply`, `return` | Heating-water flow and return temperatures |
-| `exhaust_air`, `leaving_air` | Extract air before recovery and discharge air after recovery |
-| `evaporator`, `condenser` | Evaporator and condenser refrigerant outlet (BT15 liquid line), if exposed |
-| `compressor_frequency` | Compressor frequency in Hz (also drives diagram animation) |
-| `heater_power` | Auxiliary electric heater power |
-| `electrical_power`, `cop` | Optional measured input power and separately calculated/measured COP |
-| `operation` | Reported operating mode |
-| `condenser_water_out` | BT12 water outlet temperature, used with actual compressor frequency for estimated P |
-| `hot_gas`, `suction` | BT14 compressor discharge and BT17 suction temperatures |
-| `heating_supply`, `heating_return`, `heater_out` | BT61/BT62 after-buffer temperatures and BT63 after immersion heater |
-| `air_flow` | BS1 airflow with volume/time units, for the sensible-only evaporator estimate |
-| `reference_air_flow` | Automatically discovers `sensor.vp_reference_air_speed_sensor` and equivalents; takes precedence for a clearly labeled reference-airflow sensible evaporator Q estimate |
-
-Old `controls:` configuration is ignored; this version never writes heat pump settings.
-
-## Preview and development
-
-No runtime dependencies. After editing card sources, run `npm run build` to regenerate the single HACS bundle:
-
-```sh
-python -m http.server 8080
-# Open http://localhost:8080/demo/
-node --check dist/nibe-f750-card.js
+```yaml
+type: custom:nibe-f750-smart-card
 ```
 
-Browser checks: install Playwright (`npm install --no-save playwright` and `npx playwright install chromium`), then run `npm test` while the preview server is running. Checks cover portrait layout, sensor topology, heat calculations, off/zero compressor animation, air colors, shower estimates and device discovery. `PREVIEW_URL` can override the preview origin.
+Control is enabled by default after setup, with a **15-minute startup waiting period**. Pause/Resume is available in the Smart Control card and the integration's control switch. Paused state and write timestamps survive restarts. No dashboard needs to remain open.
 
-## Smart Control and live control
+The controller uses the owner's confirmed room entities: upstairs C1 `sensor.ovanvaning_temperature`, downstairs C2 `sensor.nedervaning_temperature`, existing `vp_*` myUplink controls, and `sensor.nordpool_kwh_se3_sek_3_10_025`. Other installations need equivalent entity names; configurable source selection is not included yet. Existing diagram sensor discovery remains automatic. Add SMHI through HA for hourly forecasts in the Smart Control card.
 
-An optional [control backend](docs/live-control.md) now adjusts the two heating offsets and DHW mode, with persistent write limiting and automatic startup and Pause/Resume in the card. It uses the confirmed upstairs C1 and downstairs C2 room readings. The one-time Home Assistant package installation is required for live control.
+## Migrate from the earlier Dashboard/YAML installation
 
-A separate `custom:nibe-f750-smart-card` previews a two-zone, price/weather-aware heating and DHW plan using Home Assistant’s Nord Pool and SMHI integrations. The original diagram is unchanged. The planning demo remains separate from live control. The supplied C2 target dependency is displayed. Live two-zone schedules await a coupled hydraulic model; the fixed heat split is a demo assumption.
+1. Disable the old **Smart thermostat**, **Set target temp**, **DHW Optimization** automations and pause the old NIBE controller.
+2. Delete `/config/packages/nibe_f750_trial.yaml` if it exists. Remove any explicit include of that file from `configuration.yaml`; a general packages include can stay. Check configuration.
+3. Remove the old HACS **Dashboard** installation and re-add this repository as an **Integration**, then install it.
+4. Restart HA, add the integration under Devices & services and refresh the browser. Existing card YAML/types remain valid.
 
-[Preview](docs/smart-desktop.png) · [Setup, model limits and design](docs/smart-control.md). Both cards are included in the existing HACS download. Update/redownload and refresh, then add `type: custom:nibe-f750-smart-card`; no additional JavaScript resource is needed.
+The new integration detects old YAML helpers/scripts and **does not write** while they remain loaded. Remove the package and restart, rather than merely pausing it. This avoids two competing controllers. Existing number/comfort settings remain on the pump throughout migration.
 
-Independent community project; not affiliated with NIBE or myUplink. MIT licensed.
+Standard storage-mode dashboard resources are registered automatically, including removal of this project's old `/local/` and `/hacsfiles/` card resources. For YAML-mode dashboards, the integration loads its module through HA's frontend API; remove any old NIBE resource URLs from your YAML so an outdated card is not loaded alongside it.
+
+## What runs now
+
+- Bounded thermostat control: the original 19/20°C price rules; at most one offset step per cycle, with a 0.3°C deadband.
+- C2 follows `min(ceil(C2 room temperature), C1 target)`. C2 increases require satisfied C1 room demand and adequate BT61 supply relative to C1's calculated target.
+- A sustained 15-minute supply shortfall can reduce C2 one step when C2 is near its target; unknown/stale data and DHW priority prevent C2 increases.
+- Original Normal/Economy DHW rules, including Normal overnight.
+- **At most three setting attempts in a rolling 15-minute window**, unchanged values skipped. Durable reservation before dispatch, timestamps after completion, no immediate retry after failure. Other automations/NIBE app actions and myUplink internal HTTP retries are outside this controller's budget.
+- Local telemetry every five minutes in `sensor.nibe_control_telemetry`, normally retained by HA Recorder. Source report timestamps are included.
+
+The controller writes only the two heating offsets and DHW comfort mode. Native NIBE control owns compressor, inline-heater permission/limit, defrost and hygiene. **Forecast-based scheduling remains a planning model, not the live controller.** No calibrated COP, globally optimal cost or guaranteed inline-heater avoidance is claimed.
+
+Status is reported by the backend: Starting, Running, Paused, Waiting for readings, Legacy backend detected, Write failed or Controller error. Running means the control loop is active; check HA logs and actual settings to investigate rejected cloud requests.
+
+## Cards and calculations
+
+The existing light, portrait-friendly combined refrigerant/hydraulic circuit card is unchanged. It shows positional temperatures, animated operation, Q/P and approximate shower minutes.
+
+- [Sensor discovery](docs/discovery.md) and [manual-based schematic](docs/schematic.md)
+- [Heat calculations](docs/heat-calculations.md) and [shower estimates](docs/shower-time.md)
+- [Planning model and limits](docs/smart-control.md)
+- [Controller and migration](docs/live-control.md)
+
+## Development
+
+`npm run build` regenerates the standalone distributable and identical integration frontend. `npm run check` verifies both copies. Run `python -m http.server 8080` for `/demo/` and `/demo/smart.html`.
+
+Run `python tests/integration_test.py` for policy/runtime tests. The archived package regression checks need PyYAML/Jinja2 (`python tests/control_test.py`). Browser checks use Playwright and a running preview server (`npm test`). CI also runs HA's hassfest validation.
+
+Validation uses deterministic HA-shaped fixtures and browsers; installation on the owner's HA instance has not been verified remotely. Independent community project; not affiliated with NIBE/myUplink. MIT licensed.

@@ -1,4 +1,4 @@
-# Install in /config/packages and restart HA. See docs/live-control.md.
+# LEGACY BACKEND: remove from /config/packages when migrating to the HACS integration.
 # A native HA backend; the dashboard never writes to myUplink directly.
 input_boolean:
   nibe_smart_control_configured:
