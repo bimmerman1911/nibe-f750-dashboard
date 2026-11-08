@@ -7,7 +7,7 @@ from .entity import ControllerEntity
 
 async def async_setup_entry(hass, entry, async_add_entities):
     controller = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([ControlSensor(controller, False), ControlSensor(controller, True), ForecastSensor(controller), ModelSensor(controller)])
+    async_add_entities([ControlSensor(controller, False), ControlSensor(controller, True), ForecastSensor(controller), ModelSensor(controller), CostSensor(controller)])
 
 
 class ControlSensor(ControllerEntity, SensorEntity):
@@ -55,3 +55,16 @@ class ModelSensor(ControllerEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         return {'controller_domain': DOMAIN, **self.controller.learner.diagnostics()}
+
+
+class CostSensor(ControllerEntity, SensorEntity):
+    def __init__(self, controller):
+        super().__init__(controller, 'electricity_history', 'NIBE electricity history')
+
+    @property
+    def native_value(self):
+        return 'Recording' if self.controller.costs else 'Starting'
+
+    @property
+    def extra_state_attributes(self):
+        return {'controller_domain':DOMAIN,'electricity':self.controller.costs}

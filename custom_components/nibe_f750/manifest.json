@@ -1,6 +1,9 @@
 {
   "domain": "nibe_f750",
   "name": "NIBE F750 Smart Control",
+  "after_dependencies": [
+    "recorder"
+  ],
   "codeowners": [
     "@bimmerman1911"
   ],
@@ -15,5 +18,5 @@
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/bimmerman1911/nibe-f750-dashboard/issues",
-  "version": "0.17.4"
+  "version": "0.18.0"
 }

@@ -53,6 +53,8 @@ The card shows **Adaptive control** or **Temperature control** (fallback), the c
 
 The existing light, portrait-friendly combined refrigerant/hydraulic circuit card is unchanged. It shows positional temperatures, animated operation, Q/P and approximate shower minutes.
 
+From v0.18, **Prices & schedule** shows the past 12 hours and next 12 hours, with 15-minute predicted and observed power lines. A separate weekly area compares recorded estimated electricity cost against a modelled ordinary 20°C thermostat with Normal DHW. Future days stay blank. Available Recorder history is imported automatically; missing data is not invented. [Calculations, history and comparison basis](docs/electricity-history.md).
+
 - [Sensor discovery](docs/discovery.md) and [manual-based schematic](docs/schematic.md)
 - [Heat calculations](docs/heat-calculations.md) and [shower estimates](docs/shower-time.md)
 - [Planning model and limits](docs/smart-control.md)
@@ -62,6 +64,6 @@ The existing light, portrait-friendly combined refrigerant/hydraulic circuit car
 
 `npm run build` regenerates the standalone distributable and identical integration frontend. `npm run check` verifies both copies. Run `python -m http.server 8080` for `/demo/` and `/demo/smart.html`.
 
-Run `python tests/adaptive_test.py` for learning and active control, `python tests/predictive_test.py` for price/weather/model/source checks and `python tests/integration_test.py` for policy/runtime tests. The archived package regression checks need PyYAML/Jinja2 (`python tests/control_test.py`). Browser checks use Playwright and a running preview server (`npm test`). CI also runs HA's hassfest validation.
+Run `python tests/adaptive_test.py` for learning and active control, `python tests/predictive_test.py` for price/weather/model/source checks, `python tests/integration_test.py` for policy/runtime tests and `python tests/accounting_test.py` for power, costs and history. The archived package regression checks need PyYAML/Jinja2 (`python tests/control_test.py`). Browser checks use Playwright and a running preview server (`npm test`). CI also runs HA's hassfest validation.
 
 Validation uses deterministic HA-shaped fixtures and browsers; installation on the owner's HA instance has not been verified remotely. Independent community project; not affiliated with NIBE/myUplink. MIT licensed.

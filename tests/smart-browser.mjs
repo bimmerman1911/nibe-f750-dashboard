@@ -58,7 +58,8 @@ try {
   await card.getByRole('button',{name:'Refresh'}).click();
   await card.getByText('Forecast connection lost',{exact:true}).waitFor();
   assert.equal(await card.evaluate(c=>c._plan),null);
-  assert.equal(await card.getByRole('img').count(),0);
+  // The independent price/history chart remains available during weather failure.
+  assert.equal(await card.getByRole('img').count(),1);
   assert.deepEqual(await card.locator('.zone strong').allTextContents(),['20.1 °C','20.1 °C']);
   await page.evaluate(()=>{
     const c=document.querySelector('nibe-f750-smart-card');
@@ -102,6 +103,26 @@ try {
   assert.equal(await card.getByText('Heating ahead of future demand and prices',{exact:true}).count(),1);
   assert.equal(await card.getByText(/Learning your home/).count(),1);
   assert.equal(await card.getByText(/Recommendations are recorded for validation/).count(),0);
+  await page.clock.setFixedTime(new Date('2026-11-04T12:00:00Z'));
+  await page.evaluate(()=>{
+    const now=Date.now()/1000;
+    const history=Array.from({length:96},(_,i)=>({start:now-43200+i*900,end:now-43200+(i+1)*900,price:.8+.5*Math.sin(i/8),predicted_kw:i%24<12?1.3:0,actual_kw:i<48&&i!==12?(i%24<14?1.1:.15):null,action:i%24<12?'heat':'off'}));
+    window.smartHass.states['sensor.nibe_electricity_history']={state:'Recording',attributes:{controller_domain:'nibe_f750',electricity:{updated_at:now,timezone:'Europe/Stockholm',history,week:[{date:'2026-11-02',actual:20,baseline:25,covered_hours:24},{date:'2026-11-03',actual:18,baseline:22,covered_hours:24},{date:'2026-11-04',actual:8,baseline:10,covered_hours:4},{date:'2026-11-05',actual:999,baseline:999,covered_hours:4}]}}};
+    const c=document.querySelector('nibe-f750-smart-card');c._error='';c.hass=window.smartHass;
+  });
+  assert.equal(await card.locator('.weekly-costs tbody tr').count(),7);
+  assert.equal(await card.locator('.weekly-costs tr[data-date="2026-11-05"] td').nth(1).textContent(),'');
+  assert.equal(await card.locator('.weekly-costs tr[data-date="2026-11-05"] td').nth(0).textContent(),'Thu');
+  assert.equal(await card.locator('.weekly-costs tr[data-date="2026-11-04"] td').nth(1).textContent(),'8 SEK');
+  assert.equal(await card.locator('[data-series="actual"]').count(),1);
+  assert.equal(await card.locator('[data-series="predicted"]').count(),1);
+  const actualPath=await card.locator('[data-series="actual"]').getAttribute('d');
+  assert.equal((actualPath.match(/M/g)||[]).length,2); // Missing quarter-hour breaks the line.
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  assert.ok(await card.locator('[data-series="actual"]').evaluate(p=>p.getBBox().x+p.getBBox().width<=p.ownerSVGElement.viewBox.baseVal.width/2));
+  await page.screenshot({path:'docs/electricity-mobile.png',fullPage:true});
+  await page.setViewportSize({width:1280,height:1200});
+  await page.screenshot({path:'docs/electricity-desktop.png',fullPage:true});
   assert.deepEqual(errors,[]);
   console.log('PASS: Smart Control desktop/portrait, live HA discovery, read-only sources, forecast failure and cleared plans.');
 } finally {await browser.close();}

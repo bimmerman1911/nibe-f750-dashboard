@@ -8,6 +8,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 from .adaptive import ThermalLearner
+from .accounting import Accounting
 from .supervisor import request as adaptive_request
 from .engine import restore_dhw, calculate, fresh, number, SUPPLY, REQUIRED, PRIORITY, TELEMETRY
 
@@ -22,6 +23,11 @@ class Controller:
         self.store = Store(hass, 1, DOMAIN + '.control')
         self.forecast_store = Store(hass, 1, DOMAIN + '.predictions')
         self.learning_store = Store(hass, 1, DOMAIN + '.learning')
+        self.accounting_store = Store(hass, 1, DOMAIN + '.accounting')
+        self.accounting = Accounting(getattr(getattr(hass,'config',None),'time_zone','Europe/Stockholm'))
+        self.costs = {}
+        self.last_accounting_save = 0
+        self.history_task = None
         self.data = {'enabled': True, 'last_cycle': 0, 'last_attempt': 0, 'release_dhw':False}
         self.status = 'Starting'
         self.targets = []
@@ -43,6 +49,7 @@ class Controller:
         self.control = {'mode':'Thermostat fallback','reason':'Waiting for prices and weather.'}
 
     async def async_start(self):
+        self.accounting.restore(await self.accounting_store.async_load())
         learning = await self.learning_store.async_load()
         if learning and not self.learner.restore(learning):
             _LOGGER.warning('Invalid adaptive model data; restarting learning from initial parameters')
@@ -60,6 +67,25 @@ class Controller:
             raise ValueError('Invalid persisted controller state')
         self.unsubscribe = async_track_time_interval(self.hass, self.async_tick, timedelta(minutes=1))
         await self.async_tick()
+        if (not self.accounting.history_checked and 'recorder' in getattr(getattr(self.hass,'config',None),'components',set())
+            and hasattr(self.hass,'async_create_background_task')):
+            cutoff=min([self.accounting.previous['time'] if self.accounting.previous else self.clock()]+[r.get('observed_start',t) for t,r in self.accounting.bins.items() if r.get('seconds')])
+            self.history_task=self.hass.async_create_background_task(self.async_backfill_accounting(cutoff),'NIBE electricity history')
+
+    async def async_backfill_accounting(self, cutoff):
+        try:
+            from .history import backfill
+            restored=await backfill(self.hass,cutoff,str(self.accounting.zone),
+                {**self.learner.prior,**self.learner.parameters()},now=self.clock())
+            async with self.lock:
+                if self.stopping:
+                    return
+                self.accounting.merge_history(restored,cutoff)
+                self.costs=self.accounting.view(self.clock())
+                await self.accounting_store.async_save(self.accounting.dump())
+                self.notify()
+        except Exception:
+            _LOGGER.exception('Recorder backfill unavailable; recording new electricity history normally')
 
     def notify(self):
         for callback in tuple(self.listeners):
@@ -84,10 +110,17 @@ class Controller:
 
     async def async_stop(self):
         self.stopping = True
+        if self.history_task and not self.history_task.done():
+            self.history_task.cancel()
+            try:
+                await self.history_task
+            except asyncio.CancelledError:
+                pass
         if self.unsubscribe:
             self.unsubscribe()
         async with self.lock:
             await self.store.async_save(dict(self.data))
+            await self.accounting_store.async_save(self.accounting.dump())
 
     async def async_tick(self, _now=None):
         if self.stopping or self.lock.locked():
@@ -123,6 +156,7 @@ class Controller:
                 self.forecast = await asyncio.wait_for(self.predictor.async_update(states, now), timeout=30)
                 generated = self.forecast.get('generated_at')
                 if generated is not None and generated != self.last_prediction:
+                    self.accounting.forecast(self.forecast,now)
                     self.last_prediction = generated
                     record={k:self.forecast.get(k) for k in ('generated_at','status','message','initial_room','initial_water')}
                     steps=self.forecast.get('steps', [])
@@ -138,6 +172,14 @@ class Controller:
                 self.predictor.result = self.forecast
                 self.predictor.retry_after = 120
                 _LOGGER.exception('NIBE forecast evaluation failed')
+        try:
+            self.accounting.observe(states,now,{**self.learner.prior,**self.learner.parameters()},self.forecast)
+            if now-self.last_accounting_save>=300:
+                self.costs=self.accounting.view(now)
+                await self.accounting_store.async_save(self.accounting.dump())
+                self.last_accounting_save=now
+        except Exception:
+            _LOGGER.exception('Could not update local electricity history')
         # Source retrieval may await I/O: use current readings for live control.
         now = self.clock()
         states = {s.entity_id:s for s in self.hass.states.async_all()}
