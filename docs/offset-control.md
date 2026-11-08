@@ -31,3 +31,7 @@ Secondary-circuit recovery no longer requires upstairs to be within 0.3°C of ta
 ## Small-host computation (v0.20.2)
 
 The planner uses smaller search beams and five-minute-or-shorter internal integration steps, while retaining 15-minute forecast intervals and all native offset candidates. This reduces executor work substantially on Raspberry Pi hosts. A shared 12-second computation budget is checked during thermal and offset search. Cancellation of the enclosing async forecast also signals the executor worker to stop; cancelling an asyncio future alone does not terminate a Python thread. If the budget is exhausted, the controller clears the unfinished plan and uses temperature control/Normal DHW until its normal retry. No partial or stale plan is applied. Native write limits and the 06:00 reserve policy are unchanged.
+
+## Room-based secondary priority (v0.20.3)
+
+Primary supply shortfall can restrict or reduce C2 only when the C2 room is warmer than C1. If C2 is colder or equal, it can recover toward the shared indoor target during heating even when the primary calculated supply target is unmet. The old self-rounded C2 target is removed; an exact integer temperature below target must not create a false zero-demand condition. Native DHW priority, fresh-reading checks, device limits and the existing write cadence remain. Each secondary thermostat update still uses its normal native offset step; the primary optimiser remains free to select its full-range offset.

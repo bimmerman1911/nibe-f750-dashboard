@@ -50,15 +50,16 @@ def calculate(states, now, hour, persistent_shortfall=False, control=None):
     target1 = 20
     if control is not None:
         target1 = float(control['target_c'])
-    target2 = min(math.ceil(r2), target1)
+    target2 = target1
     e1, e2 = target1-r1, target2-r2
     next1 = control['offset_c1'] if control is not None and 'offset_c1' in control else current1 + (1 if e1 > .3 else -1 if e1 < -.3 else 0)
     heating = states.get(PRIORITY) and states[PRIORITY].state == 'Heating'
     water_valid = all(fresh(states.get(e), now) for e in (SUPPLY, REQUIRED, PRIORITY))
     water_valid = water_valid and value(SUPPLY) is not None and value(REQUIRED) is not None
     shortfall = bool(heating and water_valid and value(SUPPLY) < value(REQUIRED)-2)
-    increase = bool(heating and water_valid and not shortfall)
-    next2 = current2 + (-1 if e2 < -.3 or (persistent_shortfall and shortfall)
+    secondary_warmer = r2 > r1
+    increase = bool(heating and water_valid and (not shortfall or not secondary_warmer))
+    next2 = current2 + (-1 if e2 < -.3 or (persistent_shortfall and shortfall and secondary_warmer)
                         else 1 if e2 > .3 and increase else 0)
     # Economy is an intentional DHW deferral preset, not a lower reserve.
     # Only a valid forecast supervisor may defer; fallback restores Normal.

@@ -26,9 +26,24 @@ class Tests(unittest.TestCase):
         self.assertIn((engine.C2,-9),engine.calculate(s,BASE,12)['writes'])
         s[engine.C2].state='-9'
         s[engine.SUPPLY].state='25'
+        self.assertIn((engine.C2,-8),engine.calculate(s,BASE,12,persistent_shortfall=True)['writes'])
+        s[engine.ROOM2].state='19.6'
         self.assertNotIn(engine.C2,dict(engine.calculate(s,BASE,12)['writes']))
         self.assertIn((engine.C2,-10),engine.calculate(s,BASE,12,persistent_shortfall=True)['writes'])
         s[engine.SUPPLY].state='36';s[engine.PRIORITY].state='Hot water'
         self.assertNotIn(engine.C2,dict(engine.calculate(s,BASE,12)['writes']))
+
+    def test_reported_supply_gap_does_not_lock_out_colder_or_equal_c2(self):
+        for downstairs in (19.,19.12,19.43):
+            s=states_at(BASE)
+            for e,v in {engine.ROOM1:19.43,engine.ROOM2:downstairs,engine.C1:9,engine.C2:-10,
+                         engine.SUPPLY:34.6,engine.REQUIRED:48.9}.items():
+                s[e].state=str(v)
+            result=engine.calculate(s,BASE,12,persistent_shortfall=True)
+            self.assertEqual(result['targets'],[20,20])
+            self.assertIn((engine.C2,-9),result['writes'])
+            self.assertLessEqual(len(result['writes']),3)
+        s[engine.ROOM2].state='19.6';s[engine.C2].state='-9'
+        self.assertIn((engine.C2,-10),engine.calculate(s,BASE,12,persistent_shortfall=True)['writes'])
 
 if __name__=='__main__':unittest.main()

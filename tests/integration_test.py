@@ -175,8 +175,10 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         result = engine.calculate(states, self.hass.time, 12)
         self.assertIn(engine.C2, [e for e,v in result['writes']])
         states[engine.SUPPLY].state='30'
+        self.assertIn(engine.C2,[e for e,v in engine.calculate(states,self.hass.time,12)['writes']])
+        states[engine.ROOM2].state='19.6'
         self.assertNotIn(engine.C2,[e for e,v in engine.calculate(states,self.hass.time,12)['writes']])
-        self.assertEqual(result['targets'], [20,19])
+        self.assertEqual(result['targets'], [20,20])
         states[engine.ROOM1].state = 'unknown'
         self.assertIsNone(engine.calculate(states,self.hass.time,12))
         states[engine.ROOM1].state = '20'

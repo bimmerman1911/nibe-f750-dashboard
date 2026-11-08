@@ -67,6 +67,8 @@ Normal now follows the current DHW reservation, with low-reserve/necessary-charg
 
 If strict comfort/terminal constraints yield no schedule, the planner now searches an explicit recovery trajectory instead of immediately abandoning optimisation. Recovery prioritises reducing predicted comfort/reserve shortfalls and restoring the normal targets over price. It reports **Recovery plan**; it does not change configured temperature limits or unblock auxiliary heat. The secondary circuit can recover while upstairs is below target when measured supply is sufficient; real supply shortfalls and DHW priority still prevent an increase.
 
+From v0.20.3, C1 supply shortfall suppresses C2 only when the C2 room is warmer than C1. A colder or equally cold C2 can recover toward the shared indoor target during heating.
+
 ## Cards and calculations
 
 The existing light, portrait-friendly combined refrigerant/hydraulic circuit card is unchanged. It shows positional temperatures, animated operation, Q/P and approximate shower minutes.
