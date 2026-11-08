@@ -58,7 +58,8 @@ class Fixture:
         self.states = States(self)
         self.calls = []
         self.fail = False
-        self.services = SimpleNamespace(async_call=self.call)
+        self.legacy_writer = False
+        self.services = SimpleNamespace(async_call=self.call, has_service=lambda domain, service: self.legacy_writer and (domain, service)==('script','nibe_smart_control_cycle'))
     async def call(self, domain, service, data, blocking):
         assert Store.saved['last_attempt'] == self.time
         self.calls.append((self.time, domain, service, data))
@@ -121,6 +122,7 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.status, 'Controller error')
 
     async def test_legacy_backend_and_stop_block_dispatch(self):
+        self.hass.legacy_writer = True
         self.hass.states.values['input_boolean.nibe_smart_control_enabled'] = 'off'
         await self.controller.async_start()
         self.hass.time += 1800
@@ -131,6 +133,19 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.hass.states.values.pop('input_boolean.nibe_smart_control_enabled')
         await self.controller.async_tick()
         self.assertEqual(self.hass.calls, [])
+
+    async def test_orphan_legacy_entities_do_not_block_control(self):
+        for state in ('unavailable', 'off', 'on'):
+            Store.saved = None
+            self.hass = Fixture()
+            self.hass.states.values['input_boolean.nibe_smart_control_enabled'] = state
+            self.hass.states.values['script.nibe_smart_control_cycle'] = state
+            controller = runtime.Controller(self.hass, clock=lambda: self.hass.time)
+            await controller.async_start()
+            self.hass.time += 901
+            await controller.async_tick()
+            self.assertEqual(controller.status, 'Running')
+            self.assertEqual(len(self.hass.calls), 3)
 
     async def test_policy_c1_priority_missing_readings_and_dhw(self):
         self.hass.states.values[engine.ROOM1] = '19.1'

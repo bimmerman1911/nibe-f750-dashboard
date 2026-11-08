@@ -79,8 +79,9 @@ class Controller:
                 'unit': states[e].attributes.get('unit_of_measurement') if e in states else None,
                 'reported_at': states[e].last_reported.isoformat() if e in states else None} for e in TELEMETRY}
             self.last_sample = now
-        # Fail closed while the old package still exists, even if it is paused.
-        if 'script.nibe_smart_control_cycle' in states or 'input_boolean.nibe_smart_control_enabled' in states:
+        # Entity registry/restored states can outlive the YAML package. The
+        # script-specific service exists only while the old writer is loaded.
+        if self.hass.services.has_service('script', 'nibe_smart_control_cycle'):
             self.status = 'Legacy backend detected'
             return
         if not self.data['enabled']:

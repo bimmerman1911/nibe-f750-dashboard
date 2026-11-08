@@ -30,7 +30,7 @@ The controller uses the owner's confirmed room entities: upstairs C1 `sensor.ova
 3. Remove the old HACS **Dashboard** installation and re-add this repository as an **Integration**, then install it.
 4. Restart HA, add the integration under Devices & services and refresh the browser. Existing card YAML/types remain valid.
 
-The new integration detects old YAML helpers/scripts and **does not write** while they remain loaded. Remove the package and restart, rather than merely pausing it. This avoids two competing controllers. Existing number/comfort settings remain on the pump throughout migration.
+The new integration detects the old registered YAML script service and **does not write** while they remain loaded. Remove the package and restart, rather than merely pausing it. This avoids two competing controllers. Existing number/comfort settings remain on the pump throughout migration.
 
 Standard storage-mode dashboard resources are registered automatically, including removal of this project's old `/local/` and `/hacsfiles/` card resources. For YAML-mode dashboards, the integration loads its module through HA's frontend API; remove any old NIBE resource URLs from your YAML so an outdated card is not loaded alongside it.
 

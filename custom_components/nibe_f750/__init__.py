@@ -7,7 +7,7 @@ from homeassistant.const import Platform
 from .controller import Controller, DOMAIN
 
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
-URL = '/nibe-f750/nibe-f750-card.js?v=0.15.0'
+URL = '/nibe-f750/nibe-f750-card.js?v=0.15.1'
 
 
 async def async_setup_entry(hass, entry):
