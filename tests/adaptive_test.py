@@ -121,11 +121,11 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(result['targets'][0],20)
         self.assertIsNone(supervisor.request(self.forecast(),states,BASE+1300,predictive.DEFAULTS))
 
-    def test_imminent_charge_and_zero_charge_reserve_enable_normal(self):
+    def test_future_charge_does_not_enable_early_but_low_reserve_does(self):
         states=states_at(BASE,20.,tank=49.)
-        # Charging starts in 15 minutes: enable now because writes have a cadence.
+        # A later DHW block must not enable Normal before its start.
         control=supervisor.request(self.forecast('dhw'),states,BASE,predictive.DEFAULTS)
-        self.assertEqual(control['dhw'],'Normal')
+        self.assertEqual(control['dhw'],'Economy')
         forecast=self.forecast('off')
         states=states_at(BASE,20.,tank=45.)
         model={**predictive.DEFAULTS,'dhw_profile':[2.]*24}

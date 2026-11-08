@@ -41,6 +41,8 @@ class ThermalLearner:
         self.selected = 2
         self.draw = [.15]*24
         self.draw_counts = [0]*24
+        self.dhw_fraction=.75
+        self.dhw_start_c=self.prior['tank_target_c']
         self.dhw_capacity = bounded(self.prior['dhw_heat_kw'],1,10)
         self.tank_ceiling = bounded(self.prior['tank_max_c'],48,60)
         self.heat_range = [100., -100.]
@@ -58,7 +60,7 @@ class ThermalLearner:
         return {'version': 1, 'banks': self.banks, 'count': self.count,
                 'rejected': self.rejected, 'hours': self.hours, 'selected': self.selected,
                 'draw': self.draw, 'draw_counts': self.draw_counts,
-                'dhw_capacity': self.dhw_capacity, 'tank_ceiling': self.tank_ceiling,
+                'dhw_fraction':self.dhw_fraction,'dhw_start_c':self.dhw_start_c,'dhw_capacity': self.dhw_capacity, 'tank_ceiling': self.tank_ceiling,
                 'heat_range': self.heat_range, 'outdoor_range': self.outdoor_range}
 
     def restore(self, data):
@@ -66,6 +68,8 @@ class ThermalLearner:
         if not data or data.get('version') != 1:
             return False
         try:
+            fraction=data.get('dhw_fraction',.75);start=data.get('dhw_start_c',self.prior['tank_target_c'])
+            assert .2<=fraction<=1 and 20<=start<=65
             banks = data['banks']
             assert len(banks) == len(LAGS)
             for bank, lag in zip(banks, LAGS):
@@ -97,6 +101,7 @@ class ThermalLearner:
                         'dhw_capacity','tank_ceiling','heat_range','outdoor_range'):
                 if key in data:
                     setattr(self,key,data[key])
+            self.dhw_fraction=fraction;self.dhw_start_c=start
             return True
         except (KeyError, TypeError, ValueError, AssertionError, ZeroDivisionError):
             return False
@@ -206,6 +211,11 @@ class ThermalLearner:
         if prev['tank'] is None or cur['tank'] is None:
             self.charge_window = None
             return
+        if cur['mode']=='Hot water':
+            self.dhw_fraction=bounded(.99*self.dhw_fraction+.01*cur['fraction'],.2,1.)
+            if prev['mode']!='Hot water' and cur['comfort']=='Normal':
+                self.dhw_start_c=bounded(.8*self.dhw_start_c+.2*prev['tank'],20,65)
+            self.revision+=1
         delta = cur['tank']-prev['tank']
         if abs(delta) > 15:
             self.charge_window = None
@@ -247,6 +257,7 @@ class ThermalLearner:
         return {'heat_loss_kw_per_k':a/b, 'thermal_capacity_kwh_per_k':1/b,
                 'internal_gain_kw':g/b, 'heating_lag_hours':bank['lag'],
                 'initial_heat_kw':bank['heat'], 'dhw_heat_kw':self.dhw_capacity,
+                'dhw_fraction':self.dhw_fraction,'dhw_start_c':self.dhw_start_c,
                 'dhw_profile':self.draw[:], 'tank_max_c':min(self.prior['tank_max_c'],self.tank_ceiling),
                 'initial_run_minutes':30. if self.run_since is None else min(30.,(self.previous['time']-self.run_since)/60) if self.previous and self.previous['running'] else 0.,
                 'initial_off_minutes':15. if self.run_since is None else min(15.,(self.previous['time']-self.run_since)/60) if self.previous and not self.previous['running'] else 0.,

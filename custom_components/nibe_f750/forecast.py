@@ -5,6 +5,8 @@ from homeassistant.util import dt as dt_util
 from .engine import ROOM1, ROOM2, number, fresh, PRICE
 from .predictive import prices, timeline, plan, DEFAULTS
 from .offset import plan_offsets
+from .dhw import next_deadline
+from zoneinfo import ZoneInfo
 
 
 class Predictor:
@@ -88,9 +90,11 @@ class Predictor:
             minimum=states.get('sensor.vp_min_compressor_frequency')
             min_hz=number(minimum.state) if minimum and fresh(minimum,now) else 20.
             model={**DEFAULTS, **{k:v for k,v in self.options.items() if k in DEFAULTS}, **self.adaptive_model}
-            local_timezone=getattr(dt_util.now(),'tzinfo',timezone.utc)
+            model['timezone']=getattr(getattr(self.hass,'config',None),'time_zone','Europe/Stockholm')
+            local_timezone=ZoneInfo(model['timezone'])
             for slot in slots:
                 slot['local_hour']=datetime.fromtimestamp(slot['start'],local_timezone).hour
+                slot['dhw_deadline']=slot['start']<next_deadline(slot['start'],model['timezone'])<=slot['end']
             power_limit=states.get('select.vp_set_max_electrical_add')
             try:
                 available=float(power_limit.state.lower().replace('kw','').strip()) if fresh(power_limit,now) else 0.

@@ -59,6 +59,10 @@ The native-response model learns from observed operating data and persists along
 
 Update through Marketplace, restart HA and refresh the browser. No YAML, activation step or external model service.
 
+## Scheduled DHW and morning reserve (v0.20)
+
+Normal now follows the current DHW reservation, with low-reserve/necessary-charge exceptions and a daily 06:00 full-charge objective. A live failsafe enables Normal in time for a conservative charge estimate. Demand prediction uses the existing learned hourly usage profile; the power forecast now accounts for native charging thresholds and learned compressor fraction. [Operation and physical limits](docs/dhw-control.md).
+
 ## Cards and calculations
 
 The existing light, portrait-friendly combined refrigerant/hydraulic circuit card is unchanged. It shows positional temperatures, animated operation, Q/P and approximate shower minutes.

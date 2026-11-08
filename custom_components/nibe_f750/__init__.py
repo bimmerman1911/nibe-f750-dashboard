@@ -8,7 +8,7 @@ from .controller import Controller, DOMAIN
 from .forecast import Predictor
 
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.BUTTON]
-URL = '/nibe-f750/nibe-f750-card.js?v=0.19.3'
+URL = '/nibe-f750/nibe-f750-card.js?v=0.20.0'
 
 
 async def async_setup_entry(hass, entry):

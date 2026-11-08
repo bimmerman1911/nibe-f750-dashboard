@@ -43,7 +43,8 @@ class ModelTests(unittest.TestCase):
         self.assertGreaterEqual(result['steps'][-1]['room'],20)
         self.assertGreaterEqual(result['steps'][-1]['water'],48)
         self.assertTrue(all(19<=s['room']<=20.5 and 42<=s['water']<=55 for s in result['steps']))
-        self.assertTrue(all(s['hz'] in (0,42,84) for s in result['steps']))
+        self.assertTrue(all(0<=s['hz']<=84 for s in result['steps']))
+        self.assertTrue(any(0<s['hz']<84 for s in result['steps'] if s['dhw_mode']=='Normal'))
 
     def test_warmer_weather_reduces_demand_and_price_shape_changes_plan(self):
         market=p.prices(rows(),'SEK/kWh')

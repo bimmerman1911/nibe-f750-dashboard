@@ -29,7 +29,7 @@ class Controller:
         self.costs = {}
         self.last_accounting_save = 0
         self.history_task = None
-        self.data = {'enabled': True, 'last_cycle': 0, 'last_attempt': 0, 'release_dhw':False}
+        self.data = {'enabled': True, 'last_cycle': 0, 'last_attempt': 0, 'release_dhw':False,'dhw_morning_pending':False}
         self.status = 'Starting'
         self.targets = []
         self.telemetry = {}
@@ -161,7 +161,7 @@ class Controller:
             _LOGGER.exception('Adaptive learning update failed; retaining the last working model')
         if self.predictor:
             try:
-                self.predictor.adaptive_model = self.learner.parameters()
+                self.predictor.adaptive_model = {**self.learner.parameters(),'dhw_morning_pending':self.data['dhw_morning_pending']}
                 self.predictor.learning = self.learner.diagnostics()
                 self.predictor.offset_response = self.offset_learner.parameters()
                 self.forecast = await asyncio.wait_for(self.predictor.async_update(states, now), timeout=30)
@@ -216,7 +216,10 @@ class Controller:
                             'reason':'Restoring Normal hot-water operation.' if self.data['release_dhw'] else 'Paused; hot water is under native/manual control.'}
             result = {'targets':self.targets, 'writes':restore_dhw(states) if self.data['release_dhw'] else []}
         else:
-            chosen = adaptive_request(self.forecast,states,now,self.forecast.get('model',{})) if self.forecast.get('steps') else None
+            chosen = adaptive_request(self.forecast,states,now,{**self.forecast.get('model',{}),'dhw_morning_pending':self.data['dhw_morning_pending']}) if self.forecast.get('steps') else None
+            if chosen is not None and chosen['dhw_morning_override']!=self.data['dhw_morning_pending']:
+                self.data['dhw_morning_pending']=chosen['dhw_morning_override']
+                await self.store.async_save(dict(self.data))
             self.control = chosen or {'mode':'Thermostat fallback', 'reason':self.forecast.get('message','Prices/weather unavailable; using temperature control.')}
             result = calculate(states, now, dt_util.now().hour,
                 self.short_since is not None and now-self.short_since >= 900, control=chosen)

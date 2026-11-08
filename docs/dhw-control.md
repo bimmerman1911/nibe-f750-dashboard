@@ -1,0 +1,17 @@
+# Scheduled DHW and 06:00 reserve
+
+From v0.20, Normal enables charging during the **current** DHW reservation; Economy defers it outside reservations. The arbitrary 30-minute early enable is removed. Exceptions enable Normal for a low reserve, a necessary charge already in progress (below the normal target), or the morning failsafe. The existing cloud-write gates still apply: chart boundaries do not cause extra writes. An enabled Normal setting permits native charging; it cannot command a start or compressor speed.
+
+The demand predictor already learns a 24-hour usage profile from changes in tank temperature outside charging periods. It predicts recurring draw-off patterns, not individual showers, and starts with default demand until sufficient observations accumulate. The model now also learns the compressor fraction during DHW operation and the tank temperature seen at Normal charging starts. Stop temperature uses the existing learned Normal charge ceiling. All parameters persist locally. These estimates use average BT6/BT7 and nominal tank capacity rather than a direct flow/energy meter.
+
+The forecast simulates Normal start/stop hysteresis and estimated charging power instead of treating every DHW block as forced full-speed operation. A Normal reservation can legitimately show no DHW load if the tank is above its native start threshold. Space heating may then use compressor capacity. Saved predictions remain as issued. Current settings/reserve overrides are evaluated again against measured tank temperature before each permitted write.
+
+## Daily morning requirement
+
+The planner prioritises reaching the learned Normal full-charge level (model tank maximum, with 0.5°C tolerance) at **06:00 in Home Assistant's configured timezone**, including daylight-saving transitions. It may schedule an earlier, cheaper charge. If full charge is predicted to be unreachable, the forecast exposes the shortfall instead of silently claiming success.
+
+A separate live reserve rule enables Normal when the estimated time to full charge plus a 30-minute margin reaches the remaining time before 06:00. The estimate uses a conservative 70% of predicted charging capacity and learned hourly demand. It does not wait for a cheap price. Once a morning recovery is activated it persists across restarts until the full-charge level is observed. A startup between 06:00 and 08:00 also activates recovery for a low tank. Ordinary low-reserve protection continues throughout the day. A full tank does not needlessly keep Normal enabled. Missing forecasts/readings use the existing Normal fallback. Pause remains respected.
+
+This is a **best-effort full-charge failsafe**, not a physical guarantee: power loss, blocked equipment, large unexpected draw-offs, limited heat-pump capacity, cloud failures/write delays and native start thresholds can prevent a full tank at 06:00. In particular, Normal may refuse a top-up when the tank is above its start temperature. The controller does not change Normal preset temperatures, force Lux, bypass protections or increase cloud-write frequency. Check the actual Normal preset start/stop temperatures if the forecast repeatedly reports a morning shortfall. It does not replace native hygiene/legionella functions.
+
+Update in Marketplace, restart Home Assistant and refresh the dashboard. No additional YAML or activation step; existing learned data and pause state are preserved.

@@ -7,6 +7,7 @@ import math
 from .engine import C1, REQUIRED, SUPPLY, PRIORITY, fresh, number
 from .adaptive import bounded, filtered_heat
 from .predictive import thermal_step
+from .dhw import policy, charge
 
 DM='sensor.vp_degree_minutes_2'
 
@@ -144,7 +145,7 @@ def plan_offsets(result,states,now,response,min_hz,max_hz):
     conductance=bounded(base_load/max(5,sample['supply']-room),.05,1.)
     initial={'room':room,'water':water,'dm':sample['dm'],'supply':sample['supply'],
              'heat':sample['heat'],'stored':m.get('initial_heat_kw',sample['heat']),
-             'running':sample['heat']>0,'offset':sample['offset'],'cost':0.,'penalty':0.,'path':[]}
+             'morning_pending':m.get('dhw_morning_pending',False),'charging':sample['mode']=='Hot water','running':sample['heat']>0,'offset':sample['offset'],'cost':0.,'penalty':0.,'path':[]}
     beam=[initial]
     for slot in slots:
         dt=(slot['end']-slot['start'])/3600
@@ -156,11 +157,18 @@ def plan_offsets(result,states,now,response,min_hz,max_hz):
                 required=bounded(required,15,60)
                 r,w,dm,supply,heat,stored=(prev[k] for k in ('room','water','dm','supply','heat','stored'))
                 energy=aux_energy=0.
-                dhw=slot['action']=='dhw'
+                any_dhw=False
+                decision=policy(w,prev['charging'],slot.get('dhw_mode')=='Normal' if 'dhw_mode' in slot else slot['action']=='dhw',slot['start'],{**m,'dhw_morning_pending':prev['morning_pending']})
+                charging=prev['charging']
+                normal=decision['dhw']=='Normal'
                 running=prev['running']
                 # Minute substeps integrate backlog instead of assuming immediate heat.
                 n=max(1,math.ceil(dt*60));h=dt/n
                 for _ in range(n):
+                    draw=m.get('dhw_profile',[m['dhw_draw_kw']]*24)[slot.get('local_hour',0)]
+                    water_heat,water_fraction,water_inline,charging=charge(w,normal,charging,h,m,slot['inline_kw'],draw)
+                    dhw=water_fraction>0
+                    any_dhw=any_dhw or dhw
                     demand=max(0.,sum(a*b for a,b in zip(theta,[required-supply,-dm/100,heat,1.])))
                     demand=min(cap+m.get('auxiliary_limit_kw',0),demand)
                     heat+=(demand-heat)*(1-math.exp(-h/.25))
@@ -179,33 +187,33 @@ def plan_offsets(result,states,now,response,min_hz,max_hz):
                     equilibrium=r+q/conductance
                     supply=bounded(supply+bounded((equilibrium-supply)*(1-math.exp(-h/.5)),-2,2),15,80)
                     stored,delivered=filtered_heat(stored,q,h,m.get('heating_lag_hours',1))
-                    water_heat=m['dhw_heat_kw']+slot['inline_kw'] if dhw else 0.
                     draw=m.get('dhw_profile',[m['dhw_draw_kw']]*24)[slot.get('local_hour',0)]
                     r,w=thermal_step(r,w,slot['outdoor'],h,delivered,water_heat,m,draw)
-                    hz=max_hz if dhw else max_hz*compressor/cap
+                    hz=max_hz*water_fraction if dhw else max_hz*compressor/cap
                     bt12=m.get('dhw_supply_c',55) if dhw else supply
-                    extra=slot['inline_kw'] if dhw else auxiliary
+                    extra=water_inline if dhw else auxiliary
                     energy+=(hz*(.0161+.000208*(bt12-45))+extra)*h
                     aux_energy+=extra*h
                 violation=max(0,lo+spread-r)**2+max(0,r+spread-hi)**2
                 penalty=prev['penalty']+2000*violation*dt+100*aux_energy+.025*abs(change)
                 cost=prev['cost']+energy*slot['price']
                 point={**slot,'room':r,'water':w,'offset':offset,'degree_minutes':dm,
-                       'action':'dhw' if dhw else 'heat' if energy> .02*dt else 'off',
+                       'dhw_mode':decision['dhw'],'dhw_reason':decision['dhw_reason'],'action':'dhw' if any_dhw else 'heat' if energy> .02*dt else 'off',
                        'compressor_kw':(energy-aux_energy)/dt,'inline_kw':aux_energy/dt,'hz':hz}
                 candidates.append({'room':r,'water':w,'dm':dm,'supply':supply,'heat':heat,'stored':stored,
-                                   'running':running,'offset':offset,'cost':cost,'penalty':penalty,'path':prev['path']+[point]})
+                                   'morning_pending':decision['dhw_morning_override'],'charging':charging,'running':running,'offset':offset,'cost':cost,'penalty':penalty,'path':prev['path']+[point]})
         if not candidates:
             return None
         rank=lambda p:p['cost']+p['penalty']+20*max(0,target-p['room'])**2
         unique={}
         for p in sorted(candidates,key=rank):
-            key=(round(p['offset'],2),round(p['room']*20),round(p['dm']/50),round(p['heat']*2))
+            key=(round(p['offset'],2),round(p['room']*20),round(p['dm']/50),round(p['heat']*2),p['charging'])
             unique.setdefault(key,p)
         beam=list(unique.values())[:24]
     best=min(beam,key=lambda p:p['cost']+p['penalty']+200*max(0,target-p['room'])**2)
     return {**result,'steps':best['path'],'model_cost':best['cost'],
             'inline_kwh':sum(s['inline_kw']*(s['end']-s['start'])/3600 for s in best['path']),
             'compressor_only':all(s['inline_kw']<.01 for s in best['path']),
+            'dhw_deadline_shortfall_c':sum(max(0,m['tank_max_c']-.5-s['water']) for s in best['path'] if s.get('dhw_deadline')),
             'offset_response':response,'control_basis':'Offset optimisation with degree-minute and supply response',
             'message':'Offsets planned from prices, weather and learned heat response'}

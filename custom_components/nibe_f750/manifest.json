@@ -18,5 +18,5 @@
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/bimmerman1911/nibe-f750-dashboard/issues",
-  "version": "0.19.3"
+  "version": "0.20.0"
 }

@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta
 import math
 from dataclasses import dataclass
+from .dhw import charge
 
 DEFAULTS = {'heat_loss_kw_per_k': .10, 'thermal_capacity_kwh_per_k': 9.,
             'compressor_heat_kw': 4.2, 'dhw_heat_kw': 3.6,
@@ -89,6 +90,8 @@ class Node:
     aux: float
     parent: object = None
     step: object = None
+    charging: bool = False
+    miss: float = 0.
 
 
 def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
@@ -127,11 +130,17 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
             progress=(i+1)/len(slots)
             for prev in states:
                 for mode,qh,qw,hz,inline in actions:
+                    draw=profile[s.get('local_hour',0)] if profile is not None else m['dhw_draw_kw']
+                    if mode=='dhw':
+                        qw,fraction,inline,charging=charge(prev.water,True,prev.charging or (i==0 and initial_mode=='dhw'),s['dt'],m,inline,draw)
+                        hz=max_hz*fraction
+                    else:
+                        charging=False
                     on=hz>0
                     previous_on=prev.mode!='off'
                     if on and not previous_on and prev.off<15-1e-6:
                         continue
-                    if not on and previous_on and prev.run<30-1e-6:
+                    if not on and previous_on and prev.run<30-1e-6 and not (prev.charging and prev.water>=m['tank_max_c']-.1):
                         continue
                     if mode!='off' and prev.mode!='off' and mode!=prev.mode and prev.mode_time<15-1e-6:
                         continue
@@ -151,14 +160,16 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
                         min(15.,prev.mode_time+minutes) if mode==prev.mode else min(15.,minutes),
                         prev.cost+(power+inline)*s['dt']*s['price'],prev.aux+inline*s['dt'],prev,
                         {**s,'action':mode,'hz':hz,'inline_kw':inline,'room':nr,'water':nw,
-                         'compressor_kw':power,'delivered_heat_kw':delivered})
-                    key=(round(nr*20),round(nw*4),round(stored*2),mode,round(node.run),round(node.off),round(node.mode_time))
+                         'compressor_kw':power,'delivered_heat_kw':delivered,'dhw_mode':'Normal' if mode=='dhw' else 'Economy'},charging=charging,miss=prev.miss+(max(0,m['tank_max_c']-.5-nw) if s.get('dhw_deadline') else 0))
+                    key=(round(nr*20),round(nw*4),round(stored*2),mode,round(node.run),round(node.off),round(node.mode_time),charging)
                     old=unique.get(key)
-                    if old is None or (node.aux,node.cost)<(old.aux,old.cost):
+                    if old is None or (node.miss,node.aux,node.cost)<(old.miss,old.aux,old.cost):
                         unique[key]=node
             def rank(n):
+                next_due=next((q['end'] for q in slots[i:] if q.get('dhw_deadline')),None)
+                urgent=0 if next_due is None else 100*max(0,m['tank_max_c']-.5-n.water)**2/(1+(next_due-s['end'])/3600)**2
                 deficit=max(0,m['room_target_c']-n.room)**2*40+max(0,m['tank_target_c']-n.water)**2*2
-                return (n.aux,n.cost+progress**4*deficit)
+                return (n.miss,n.aux,n.cost+progress**4*deficit+urgent)
             ordered=sorted(unique.values(),key=rank)
             buckets={}
             for n in ordered:
@@ -169,12 +180,16 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
             if not states:
                 return None
         feasible=[n for n in states if n.room>=m['room_target_c']-1e-7 and n.water>=m['tank_target_c']-1e-7]
-        return min(feasible,key=lambda n:(n.aux,n.cost)) if feasible else None
+        return min(feasible,key=lambda n:(n.miss,n.aux,n.cost)) if feasible else None
     best=solve(False,beam)
     if best is None:
         best=solve(False,beam*3)
     compressor_only=best is not None
-    best=best or solve(True,beam)
+    if best is None or best.miss>.1:
+        supported=solve(True,beam)
+        if supported is not None and (best is None or (supported.miss,supported.aux,supported.cost)<(best.miss,best.aux,best.cost)):
+            best=supported
+    compressor_only=best is not None and best.aux<.01
     if best is None:
         return {'status':'No feasible schedule','message':'Using thermostat control: no schedule found within capacity and comfort limits.', 'steps':[]}
     steps=[]
@@ -185,6 +200,6 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
     action=steps[0]['action']
     description={'off':'Using stored heat','heat':'Building heating reserve','dhw':'Preparing hot water'}[action]
     return {'status':'Adaptive schedule','message':description,'steps':steps,
-            'model_cost':best.cost,'inline_kwh':best.aux,'compressor_only':compressor_only,
+            'dhw_deadline_shortfall_c':best.miss,'model_cost':best.cost,'inline_kwh':best.aux,'compressor_only':compressor_only,
             'model':m,'horizon_end':slots[-1]['end'],
             'scope':'Active supervisory control through heating targets and DHW comfort mode.'}
