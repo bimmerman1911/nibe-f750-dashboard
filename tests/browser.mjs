@@ -10,6 +10,40 @@ try {
   await card.getByText('Demo data',{exact:true}).waitFor();
   assert.equal(await card.getByRole('img',{name:'Combined F750 refrigerant and hydraulic circuits'}).count(),1);
   assert.equal(await card.getByText('Smart control · planned').count(),0);
+  const topology=await card.evaluate(c=>[...c.shadowRoot.querySelectorAll('svg')].map(svg=>{
+    const previous=svg.style.display;svg.style.display='block';
+    const onPath=(path,point)=>{let best=Infinity;for(let i=0;i<=1000;i++){const p=path.getPointAtLength(path.getTotalLength()*i/1000);best=Math.min(best,Math.hypot(p.x-point.x,p.y-point.y));}return best;};
+    const dot=id=>{const d=svg.querySelector(`[data-sensor="${id}"] circle`);return {x:+d.getAttribute('cx'),y:+d.getAttribute('cy')};};
+    const path=name=>svg.querySelector(`[data-flow="${name}"] > path`);
+    const heater=svg.querySelector('[data-component="heater"] rect').getBBox();
+    const insideHeater=path=>{for(let i=0;i<=1000;i++){const p=path.getPointAtLength(path.getTotalLength()*i/1000);if(p.x>heater.x&&p.x<heater.x+heater.width&&p.y>heater.y&&p.y<heater.y+heater.height)return true;}return false;};
+    const port=svg.querySelector('[data-component="diverter"] circle');
+    const samePort=name=>{const p=path(name).getPointAtLength(0);return p.x===+port.getAttribute('cx')&&p.y===+port.getAttribute('cy');};
+    const outlet=svg.querySelector('[data-sensor="BT21"]').getBBox();
+    const refLeft=path('refrigerant-suction').getPointAtLength(0).x;
+    const result={sensors:[...svg.querySelectorAll('[data-sensor]')].map(e=>e.dataset.sensor),outletOutside:outlet.x+outlet.width<refLeft,bt21OnAir:onPath(path('air-outlet'),dot('BT21'))<3,bt15OnLiquid:onPath(path('refrigerant-liquid'),dot('BT15'))<3,bt63OnCommon:onPath(path('water-common-supply'),dot('BT63'))<3,commonHasHeater:insideHeater(path('water-common-supply')),branchesAfterHeater:['water-heating-supply','water-dhw-supply'].every(name=>samePort(name)&&!insideHeater(path(name)))};
+    svg.style.display=previous;return result;
+  }));
+  for(const t of topology) {
+    assert.deepEqual(t.sensors.slice().sort(),['BT3','BT6','BT7','BT12','BT14','BT15','BT16','BT17','BT20','BT21','BT61','BT62','BT63'].sort());
+    for(const key of ['outletOutside','bt21OnAir','bt15OnLiquid','bt63OnCommon','commonHasHeater','branchesAfterHeater']) assert.equal(t[key],true,key);
+  }
+  const extraSensors=await page.evaluate(async()=>{
+    const {discoverEntities}=await import('/dist/nibe-f750-card.js');
+    const entries=[['charge','40014'],['gas','40018'],['suction','40022'],['heating_out','40047'],['heating_back','40048']].map(([name,id])=>({platform:'myuplink',device_id:'pump',entity_id:`sensor.${name}`,unique_id:`cloud-${id}`}));
+    entries.push({platform:'myuplink',device_id:'pump',entity_id:'sensor.temp_after_heater_bt63',unique_id:'cloud-unknown'});
+    return discoverEntities(entries,'pump').entities;
+  });
+  assert.equal(extraSensors.hot_water,undefined); // BT6 must not be relabeled BT7.
+  assert.deepEqual(extraSensors,{hot_water_charge:'sensor.charge',hot_gas:'sensor.gas',suction:'sensor.suction',heating_supply:'sensor.heating_out',heating_return:'sensor.heating_back',heater_out:'sensor.temp_after_heater_bt63'});
+  const active=name=>card.locator(`.portrait [data-flow="${name}"] .flow:not(.paused)`).count();
+  assert.equal(await active('air-outlet'),1);
+  assert.equal(await active('water-heating-supply'),1);
+  assert.equal(await active('water-dhw-supply'),0);
+  await card.evaluate(c=>{window.demoHass.states={...window.demoHass.states,'sensor.demo_operation':{state:'Hot water',attributes:{}}};c.hass=window.demoHass;});
+  assert.equal(await active('water-heating-supply'),0);
+  assert.equal(await active('water-dhw-supply'),1);
+  await card.evaluate(c=>{window.demoHass.states={...window.demoHass.states,'sensor.demo_operation':{state:'Space heating',attributes:{}}};c.hass=window.demoHass;});
   const cases=await page.evaluate(async()=>{
     const {calculateHeat,discoverEntities}=await import('/dist/nibe-f750-card.js');
     const state=(value,unit)=>({state:String(value),attributes:{unit_of_measurement:unit}});
@@ -86,7 +120,7 @@ try {
   }
   await page.setViewportSize({width:390,height:844});
   await page.emulateMedia({reducedMotion:'reduce'});
-  assert.equal(await card.locator('.portrait .flow').evaluate(e=>getComputedStyle(e).animationName),'none');
+  assert.equal(await card.locator('.portrait .flow').evaluateAll(es=>es.every(e=>getComputedStyle(e).animationName==='none')),true);
   await page.screenshot({path:'docs/mobile.png',fullPage:true});
   await page.evaluate(()=>{
     const c=document.querySelector('nibe-f750-card');

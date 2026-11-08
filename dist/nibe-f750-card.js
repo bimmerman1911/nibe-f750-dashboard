@@ -10,10 +10,12 @@ const readings = {
   operation: ['Operating mode', ''],
   condenser_water_out: ['Condenser water outlet', '°C'], air_flow: ['Extract airflow', ''],
   reference_air_flow: ['Reference airflow', ''],
+  hot_water_charge: ['Hot water control', '°C'], hot_gas: ['Hot gas', '°C'], suction: ['Suction gas', '°C'],
+  heating_supply: ['Heating supply after buffer', '°C'], heating_return: ['Heating return after buffer', '°C'], heater_out: ['Water after immersion heater', '°C'],
 };
 // F750 parameter IDs; myUplink unique IDs are `${device_id}-${parameter_id}`.
 // References and compatibility notes: docs/discovery.md.
-const points = {outdoor:['40004'],room:['40033'],hot_water:['40013','40014'],supply:['40008'],return:['40012'],exhaust_air:['40025'],leaving_air:['40026'],evaporator:['40020'],condenser:['40019'],compressor_frequency:['43136'],heater_power:['43084'],operation:['49994'],condenser_water_out:['40017'],air_flow:['40050'],reference_air_flow:['43124']};
+const points = {outdoor:['40004'],room:['40033'],hot_water:['40013'],supply:['40008'],return:['40012'],exhaust_air:['40025'],leaving_air:['40026'],evaporator:['40020'],condenser:['40019'],compressor_frequency:['43136'],heater_power:['43084'],operation:['49994'],condenser_water_out:['40017'],air_flow:['40050'],reference_air_flow:['43124'],hot_water_charge:['40014'],hot_gas:['40018'],suction:['40022'],heating_supply:['40047'],heating_return:['40048'],heater_out:[]};
 // API names can vary from the older F-series register catalog. Match only
 // explicit measurement names/BT designations, scoped to the selected device.
 const aliases = {
@@ -32,6 +34,12 @@ const aliases = {
   condenser_water_out: [/(?:^| )bt12 (?:condensor|condenser) out$/, /(?:^| )(?:condenser|condensor) (?:out|outlet|water outlet|outlet temperature)(?: bt12)?$/],
   air_flow: [/(?:^| )bs1 air flow$/, /(?:^| )(?:extract|exhaust) air ?flow$/],
   reference_air_flow: [/(?:^| )reference air speed sensor$/, /(?:^| )reference air ?flow$/, /(?:^| )air ?flow (?:ref|reference)$/],
+  hot_water_charge: [/(?:^| )hot water (?:charging|control)(?: bt6)?$/, /(?:^| )bt6 hw load$/],
+  hot_gas: [/(?:^| )(?:bt14 )?hot gas temp(?:erature)?(?: bt14)?$/],
+  suction: [/(?:^| )(?:bt17 )?suction(?: gas)?(?: temp(?:erature)?)?(?: bt17)?$/],
+  heating_supply: [/(?:^| )bt61 supply radiator temp$/, /(?:^| )(?:heating medium flow|supply temperature) after buffer(?: vessel)?(?: bt61)?$/, /(?:^| )bt61$/],
+  heating_return: [/(?:^| )bt62 return radiator temp$/, /(?:^| )(?:heating medium return|return temperature) after buffer(?: vessel)?(?: bt62)?$/, /(?:^| )bt62$/],
+  heater_out: [/(?:^| )bt63$/, /(?:^| )(?:heating medium supply|supply temperature) after (?:immersion|inline) heater(?: bt63)?$/],
 };
 const normalize = text => String(text || '').toLowerCase().replace(/[\u00ad]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
 export function discoverEntities(registry, deviceId, states = {}) {
@@ -88,9 +96,9 @@ const css = `
 ha-card{display:block;background:#fff;color:#203344;border:1px solid #dce6eb;border-radius:24px;overflow:hidden;box-shadow:0 12px 40px #243c4b08}
 header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 26px;border-bottom:1px solid #e5edf0;background:linear-gradient(115deg,#f5fbf9,#fff 70%)}.eyebrow{font-size:11px;letter-spacing:.17em;text-transform:uppercase;color:#487468;font-weight:700}h1{font-size:27px;font-weight:550;letter-spacing:-.04em;margin:7px 0}h2{font-size:16px;font-weight:600;margin:0}p{color:#596d7d;font-size:13px;line-height:1.6;margin:6px 0}.pill{display:inline-block;border:1px solid #b7ded2;background:#edf8f3;color:#24715b;border-radius:25px;padding:8px 12px;font-size:12px}.demo{color:#895a14;background:#fff8e9;border-color:#ebd8ae}
 .body{padding:20px 26px}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}.stat{padding:17px;border:1px solid #e0e9ed;border-radius:16px;background:#f8fafb}.label{color:#596d7d;font-size:12px}.value{font-size:27px;letter-spacing:-.04em;margin-top:10px}.unit{font-size:13px;color:#596d7d;margin-left:5px}.sub{font-size:11px;color:#596d7d;margin-top:6px}
-.panel{border:1px solid #dce6eb;border-radius:18px;padding:20px;min-width:0}.heading{display:flex;justify-content:space-between;gap:10px;align-items:center}.tag{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#596d7d}.legend{display:flex;flex-wrap:wrap;gap:10px 22px;padding:14px 0 0;font-size:11px;color:#526777}.legend span{display:flex;gap:7px;align-items:center}.legend i{width:20px;height:3px;border-radius:4px;background:var(--line)}.scheme-scroll{overflow-x:auto;border-radius:12px;scrollbar-color:#adc8c2 #f1f6f5}.scheme-scroll:focus-visible{outline:2px solid #268b73;outline-offset:3px}.scroll-hint{display:none}.portrait{display:none}svg{display:block;width:100%;min-width:820px;height:auto;margin:12px 0}svg text{font-family:inherit;fill:#203344;font-size:12px}svg .muted{fill:#596d7d;font-size:11px}svg .section-label{fill:#637886;font-size:10px;letter-spacing:1.6px;font-weight:600}svg .node{fill:#fff;stroke:#b5c8d1;stroke-width:1.5}svg .pipe{fill:none;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}svg .ref-high{stroke:#9171ba}svg .ref-low{stroke:#3d9c9a}svg .hot{stroke:#dd8051}svg .cold{stroke:#5a96bf}svg .air{stroke:#9db4bf;stroke-width:2;stroke-dasharray:5 5;fill:none}svg .flow{stroke-dasharray:3 14;stroke:#ffffffbb;stroke-width:2;animation:flow 3s linear infinite}svg .flow.paused{animation:none;stroke:transparent}@keyframes flow{to{stroke-dashoffset:-68}}
+.panel{border:1px solid #dce6eb;border-radius:18px;padding:20px;min-width:0}.heading{display:flex;justify-content:space-between;gap:10px;align-items:center}.tag{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#596d7d}.legend{display:flex;flex-wrap:wrap;gap:10px 22px;padding:14px 0 0;font-size:11px;color:#526777}.legend span{display:flex;gap:7px;align-items:center}.legend i{width:20px;height:3px;border-radius:4px;background:var(--line)}.scheme-scroll{overflow-x:auto;border-radius:12px;scrollbar-color:#adc8c2 #f1f6f5}.scheme-scroll:focus-visible{outline:2px solid #268b73;outline-offset:3px}.scroll-hint{display:none}.portrait{display:none}svg{display:block;width:100%;min-width:820px;height:auto;margin:12px 0}svg text{font-family:inherit;fill:#203344;font-size:12px}svg .muted{fill:#596d7d;font-size:11px}svg .section-label{fill:#637886;font-size:10px;letter-spacing:1.6px;font-weight:600}svg .node{fill:#fff;stroke:#b5c8d1;stroke-width:1.5}svg .pipe{fill:none;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}svg .ref-high{stroke:#9171ba}svg .ref-low{stroke:#3d9c9a}svg .hot{stroke:#dd8051}svg .cold{stroke:#5a96bf}svg .air{stroke:#9db4bf;stroke-width:2;stroke-dasharray:5 5;fill:none}svg .sensor-dot{fill:#fff;stroke:#466779;stroke-width:1.5}svg .sensor-leader{fill:none;stroke:#a2b5bf;stroke-width:1}svg .sensor-code{font-size:10px;fill:#667c8c}svg .direction{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}svg .direction.air{stroke-dasharray:none}svg .flow{stroke-dasharray:3 14;stroke:#ffffffbb;stroke-width:2;animation:flow 3s linear infinite}svg .flow.air-motion{stroke:#527f92}svg .flow.paused{animation:none;stroke:transparent}@keyframes flow{to{stroke-dashoffset:-68}}
 .more{margin-top:18px;color:#596d7d;font-size:12px}.more summary{cursor:pointer;padding:8px 0}.more p{font-size:12px}.more .discovery{margin:10px 0 18px}.more .discovery button{margin-top:8px}.schematic{padding:8px;border:0}.more .metrics{margin:16px 0}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px 22px;border-top:1px solid #e5edf0;padding-top:18px}.metric{display:flex;flex-direction:column;gap:6px;font-size:12px}.metric span{color:#596d7d}.metric b{font-size:14px;font-weight:550}.controls{margin-top:18px}.control-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}label{display:block;font-size:12px;color:#596d7d;margin-bottom:8px}select,input,button{font:inherit;border:1px solid #cbdcde;border-radius:10px;background:#fff;color:#203344;padding:10px;max-width:100%}select,input{width:100%}button{cursor:pointer;background:#edf8f3;color:#216c57;white-space:nowrap}button:hover{background:#e0f1e9}button:disabled{opacity:.45;cursor:default}.row{display:flex;gap:8px}.notice{font-size:12px;color:#216c57}.notice:not(:empty){margin-top:12px}.empty{padding:12px;border:1px dashed #cbdcde;border-radius:10px;font-size:12px;color:#596d7d}footer{padding-top:18px;color:#596d7d;font-size:11px;line-height:1.6}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #268b73;outline-offset:3px}
-@container(max-width:700px){header,.body{padding:20px}.control-grid{grid-template-columns:1fr}.stats,.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}h1{font-size:23px}.scheme-scroll{overflow:visible}.landscape{display:none}.portrait{display:block;min-width:0}.portrait text{font-size:14px}.portrait .muted{font-size:13px}.portrait .section-label{font-size:10px}.panel{padding:16px}header,.body{padding:16px}.legend{gap:10px 14px}select,input{font-size:16px;min-height:44px}button{min-height:44px}header .pill{flex-shrink:0}.heading{flex-wrap:wrap}}@media(prefers-reduced-motion:reduce){svg .flow{animation:none}}
+@container(max-width:700px){header,.body{padding:20px}.control-grid{grid-template-columns:1fr}.stats,.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}h1{font-size:23px}.scheme-scroll{overflow:visible}.landscape{display:none}.portrait{display:block;min-width:0}.portrait text{font-size:14px}.portrait .muted{font-size:13px}.portrait .section-label{font-size:10px}.portrait .sensor-code{font-size:12px}.panel{padding:16px}header,.body{padding:16px}.legend{gap:10px 14px}select,input{font-size:16px;min-height:44px}button{min-height:44px}header .pill{flex-shrink:0}.heading{flex-wrap:wrap}}@media(prefers-reduced-motion:reduce){svg .sensor-dot{fill:#fff;stroke:#466779;stroke-width:1.5}svg .sensor-leader{fill:none;stroke:#a2b5bf;stroke-width:1}svg .sensor-code{font-size:10px;fill:#667c8c}svg .direction{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}svg .direction.air{stroke-dasharray:none}svg .flow{animation:none}}
 `;
 export class NibeF750Card extends HTMLElement {
   constructor() { super(); this.attachShadow({mode:'open'}); this._busy = false; }
@@ -187,112 +195,113 @@ export class NibeF750Card extends HTMLElement {
     finally { this._busy=false; this.shadowRoot.querySelectorAll('[data-apply]').forEach(b=>b.disabled=false); }
   }
   notice(message) { this.shadowRoot.querySelector('[role="status"]').textContent = message; }
+  sensor(id,key,x,y,tx,ty,anchor='start') {
+    return `<g class="sensor" data-sensor="${id}"><title>${id} · ${readings[key][0]}</title><path class="sensor-leader" d="M${x} ${y}L${tx} ${ty-8}"/><circle class="sensor-dot" cx="${x}" cy="${y}" r="3"/><text x="${tx}" y="${ty}" text-anchor="${anchor}"><tspan class="sensor-code">${id}</tspan><tspan x="${tx}" dy="18">${this.value(key)} ${this.available(this.state(key))?this.unit(key):''}</tspan></text></g>`;
+  }
+  diagram(portrait,a) {
+    const prefix=portrait?'p':'l';
+    const pipe=(name,d,color,active)=>`<g data-flow="${name}"><path class="pipe ${color}" d="${d}"/><path class="pipe flow ${active?'':'paused'} ${color==='air'?'air-motion':''}" d="${d}"/></g>`;
+    const arrow=(x,y,angle,color)=>`<path class="direction ${color}" d="M-5 -4L1 0L-5 4" transform="translate(${x} ${y}) rotate(${angle})"/>`;
+    const sensor=(...args)=>this.sensor(...args);
+    const compressor=(x,y)=>`<circle class="node" cx="${x}" cy="${y}" r="25"/><path d="M${x-9} ${y+11}L${x+14} ${y}L${x-9} ${y-11}Z" fill="#9171ba"/><text x="${x}" y="${y+48}" text-anchor="middle">${this.value('compressor_frequency')} ${this.unit('compressor_frequency')}</text><text x="${x}" y="${y+70}" text-anchor="middle">P = ${this.heatValue('compressor')}</text>`;
+    const heater=(x,y)=>`<g data-component="heater"><title>EB1 · common immersion heater before QN10</title><rect class="node" x="${x-32}" y="${y-18}" width="64" height="36" rx="9"/><path d="M${x-23} ${y}H${x-16}L${x-10} ${y-10}L${x-3} ${y+10}L${x+4} ${y-10}L${x+10} ${y}H${x+23}" fill="none" stroke="#dd8051" stroke-width="2"/><text x="${x}" y="${y+43}" text-anchor="middle">${this.value('heater_power')} ${this.unit('heater_power')}</text></g>`;
+    const valve=(x,y)=>`<g data-component="diverter"><title>QN10 · changeover valve, heating or DHW</title><circle class="node" cx="${x}" cy="${y}" r="9"/><text class="sensor-code" x="${x-14}" y="${y+32}">QN10</text></g>`;
+    const radiator=(x,y)=>`<rect class="node" x="${x-40}" y="${y}" width="80" height="50" rx="9"/><path d="M${x-26} ${y+10}V${y+40}M${x-13} ${y+10}V${y+40}M${x} ${y+10}V${y+40}M${x+13} ${y+10}V${y+40}M${x+26} ${y+10}V${y+40}" stroke="#dd8051" stroke-width="3"/>`;
+    const buffer=(x,y)=>`<g data-component="buffer"><title>Heating buffer vessel, simplified</title><rect class="node" x="${x-24}" y="${y}" width="48" height="35" rx="10"/><path d="M${x-13} ${y+12}H${x+13}M${x-13} ${y+23}H${x+13}" stroke="#c8d9df"/></g>`;
+    const shell=portrait?'0 0 400 1110':'0 25 1160 530';
+    const desc='BT20 inlet air and BT21 outlet air are on the air duct. BT14 hot gas, BT17 suction, BT15 liquid line and BT16 evaporator are on the refrigerant side. BT12 is before the common heater; BT63 is after it and before QN10. BT61 and BT62 are on the heating circuit after the buffer. BT7 and BT6 are tank sensors. Arrows show normal flow; motion is illustrative, not measured flow.';
+    return `<svg class="${portrait?'portrait':'landscape'}" viewBox="${shell}" role="img" aria-labelledby="${prefix}-title ${prefix}-desc"><title id="${prefix}-title">Combined F750 refrigerant and hydraulic circuits</title><desc id="${prefix}-desc">${desc}</desc>${portrait?`
+      <rect x="6" y="35" width="388" height="410" rx="18" fill="#f6faf9"/><rect x="6" y="450" width="388" height="650" rx="18" fill="#faf8f5"/>
+      ${pipe('refrigerant-suction','M100 210V130H195','ref-low',a.refrigerant)}
+      ${pipe('refrigerant-discharge','M245 130H345V400H250','ref-high',a.refrigerant)}
+      ${pipe('refrigerant-liquid','M170 400H100V365','ref-high',a.refrigerant)}
+      ${pipe('refrigerant-evaporator','M100 335V270','ref-low',a.refrigerant)}
+      ${pipe('air-inlet','M30 100V230H70','air',a.air)}
+      ${pipe('air-outlet','M70 250H30V350','air',a.air)}
+      ${arrow(30,205,90,'air')}${arrow(30,338,90,'air')}${arrow(310,130,0,'ref-high')}${arrow(100,295,-90,'ref-low')}
+      <rect class="node" x="70" y="210" width="60" height="60" rx="12"/><path d="M80 220L91 232L80 244L91 258M120 220L109 232L120 244L109 258" fill="none" stroke="#67aaa6" stroke-width="2"/>
+      ${compressor(220,130)}<path class="node" d="M89 335L111 365V335L89 365Z"/>
+      <rect class="node" x="170" y="375" width="80" height="80" rx="12"/><path d="M170 400H250" stroke="#9171ba" stroke-width="5"/><path d="M170 432H250" stroke="#dd8051" stroke-width="5"/><path d="M178 413L190 421L202 413L214 421L226 413L240 421" fill="none" stroke="#b5c8d1" stroke-width="2"/>
+      ${sensor('BT20','exhaust_air',30,155,8,65)}
+      ${sensor('BT21','leaving_air',30,310,8,380)}
+      ${sensor('BT17','suction',150,130,140,70)}
+      ${sensor('BT14','hot_gas',300,130,350,70,'end')}
+      ${sensor('BT16','evaporator',100,240,160,235)}<text x="160" y="285">Q = ${this.heatValue('qEvaporator')}</text>
+      ${sensor('BT15','condenser',130,400,210,333,'end')}
+      ${pipe('water-common-supply','M250 432H370V535H220','hot',a.water)}
+      ${pipe('water-heating-supply','M220 535H95V790','hot',a.heating)}
+      ${pipe('water-dhw-supply','M220 535V640H310V875','hot',a.dhw)}
+      ${pipe('water-heating-return','M95 840V1060','cold',a.heating)}
+      ${pipe('water-dhw-coil','M310 875Q340 895 310 915Q280 935 310 955','hot',a.dhw)}
+      ${pipe('water-dhw-return','M310 955V1060H95','cold',a.dhw)}
+      ${pipe('water-common-return','M95 1060H15V432H170','cold',a.water)}
+      ${arrow(370,505,90,'hot')}${arrow(270,535,180,'hot')}${arrow(95,680,90,'hot')}${arrow(310,790,90,'hot')}${arrow(95,1010,90,'cold')}${arrow(225,1060,180,'cold')}${arrow(15,700,-90,'cold')}
+      ${heater(320,535)}${valve(220,535)}${buffer(95,705)}${radiator(95,790)}
+      <rect class="node" x="270" y="850" width="90" height="145" rx="22"/><path class="pipe hot" d="M310 850V875Q340 895 310 915Q280 935 310 955"/><path class="pipe cold" d="M310 955V995"/><path class="pipe flow ${a.dhw?'':'paused'}" d="M310 850V875Q340 895 310 915Q280 935 310 955V995"/>
+      ${sensor('BT12','condenser_water_out',310,432,315,470,'end')}
+      ${sensor('BT3','return',105,432,115,470)}<text x="210" y="510" text-anchor="middle">Q = ${this.heatValue('qCondenser')}</text>
+      ${sensor('BT63','heater_out',250,535,268,595,'end')}
+      ${sensor('BT61','heating_supply',95,765,150,750)}
+      ${sensor('BT62','heating_return',95,990,150,1005)}
+      ${sensor('BT7','hot_water',350,870,380,825,'end')}
+      ${sensor('BT6','hot_water_charge',350,970,380,1020,'end')}
+    `:`
+      <rect x="6" y="35" width="545" height="505" rx="18" fill="#f6faf9"/><rect x="560" y="35" width="590" height="505" rx="18" fill="#faf8f5"/>
+      ${pipe('refrigerant-suction','M165 220V130H295','ref-low',a.refrigerant)}
+      ${pipe('refrigerant-discharge','M345 130H466V220','ref-high',a.refrigerant)}
+      ${pipe('refrigerant-liquid','M466 300V410H332','ref-high',a.refrigerant)}
+      ${pipe('refrigerant-evaporator','M308 410H165V300','ref-low',a.refrigerant)}
+      ${pipe('air-inlet','M65 115V240H120','air',a.air)}${pipe('air-outlet','M120 280H55V420','air',a.air)}
+      ${arrow(65,210,90,'air')}${arrow(55,400,90,'air')}${arrow(430,130,0,'ref-high')}${arrow(165,360,-90,'ref-low')}
+      <rect class="node" x="120" y="220" width="90" height="80" rx="12"/><path d="M132 233L145 247L132 261L145 285M198 233L185 247L198 261L185 285" fill="none" stroke="#67aaa6" stroke-width="2"/>
+      ${compressor(320,130)}<path class="node" d="M308 398L332 422V398L308 422Z"/>
+      <rect class="node" x="440" y="220" width="104" height="80" rx="12"/><path d="M466 220V300" stroke="#9171ba" stroke-width="5"/><path d="M518 220V300" stroke="#dd8051" stroke-width="5"/><path d="M486 231L498 243L486 255L498 267L486 279L498 290" fill="none" stroke="#b5c8d1" stroke-width="2"/>
+      ${sensor('BT20','exhaust_air',65,175,12,95)}${sensor('BT21','leaving_air',55,375,12,455)}
+      ${sensor('BT17','suction',230,130,200,85)}${sensor('BT14','hot_gas',400,130,430,85,'end')}
+      ${sensor('BT16','evaporator',165,260,245,250)}<text x="245" y="302">Q = ${this.heatValue('qEvaporator')}</text>
+      ${sensor('BT15','condenser',466,350,425,345,'end')}
+      ${pipe('water-common-supply','M518 220V115H790','hot',a.water)}
+      ${pipe('water-heating-supply','M790 115H970V240','hot',a.heating)}
+      ${pipe('water-dhw-supply','M790 115V335','hot',a.dhw)}
+      ${pipe('water-heating-return','M970 290V470H790','cold',a.heating)}
+      ${pipe('water-dhw-coil','M790 335Q830 350 790 370Q750 390 790 410','hot',a.dhw)}
+      ${pipe('water-dhw-return','M790 410V470','cold',a.dhw)}
+      ${pipe('water-common-return','M790 470H518V300','cold',a.water)}
+      ${arrow(590,115,0,'hot')}${arrow(850,115,0,'hot')}${arrow(970,220,90,'hot')}${arrow(790,275,90,'hot')}${arrow(970,420,90,'cold')}${arrow(620,470,180,'cold')}
+      ${heater(660,115)}${valve(790,115)}${buffer(970,145)}${radiator(970,240)}
+      <rect class="node" x="735" y="310" width="110" height="130" rx="24"/><path class="pipe hot" d="M790 310V335Q830 350 790 370Q750 390 790 410"/><path class="pipe cold" d="M790 410V440"/><path class="pipe flow ${a.dhw?'':'paused'}" d="M790 310V335Q830 350 790 370Q750 390 790 410V440"/>
+      ${sensor('BT12','condenser_water_out',560,115,560,65)}${sensor('BT63','heater_out',730,115,740,65,'end')}
+      ${sensor('BT3','return',550,470,560,510)}<text x="590" y="345">Q = ${this.heatValue('qCondenser')}</text>
+      ${sensor('BT61','heating_supply',970,205,1030,190)}${sensor('BT62','heating_return',970,390,1030,405)}
+      ${sensor('BT7','hot_water',835,335,875,325)}${sensor('BT6','hot_water_charge',835,415,875,445)}
+    `}</svg>`;
+  }
   render() {
     if (!this.config) return;
     // Preserve an in-progress setting while cloud readings refresh.
     const active = this.shadowRoot.activeElement;
     const drafts = active?.matches('input,select') ? [[active.id, active.value]] : [];
     const running = this.available(this.state('compressor_frequency')) && Number(this.state('compressor_frequency').state)>0;
-    const flow = running ? 'flow' : 'flow paused';
+    const mode=normalize(this.state('operation')?.state);
+    const water=running || (this.available(this.state('heater_power')) && Number(this.state('heater_power').state)>0);
+    const dhw=/hot water|dhw/.test(mode),heating=!dhw && /heating/.test(mode);
+    const air=['air_flow','reference_air_flow'].some(k=>this.available(this.state(k)) && Number(this.state(k).state)>0);
+    const activity={refrigerant:running,water,heating:water&&heating,dhw:water&&dhw,air};
     this._heat=calculateHeat(this._hass?.states || {},this.config.entities);
     const mapped = Object.values(this.config.entities), available = mapped.filter(id=>this.available(this._hass?.states[id])).length;
     this.shadowRoot.innerHTML = `<style>${css}</style><ha-card>
       <header><div><h1>${esc(this.config.title)}</h1></div><span class="pill ${this.config.demo?'demo':''}" title="${available}/${mapped.length} readings available">${this.config.demo?'Demo data':this.available(this.state('operation'))?this.value('operation'):'myUplink'}</span></header>
-      <div class="body"><div class="stats">${['outdoor','room','hot_water','compressor_frequency'].map(k=>`<div class="stat"><div class="label">${readings[k][0]}</div><div class="value">${this.value(k)}<span class="unit">${this.available(this.state(k))?this.unit(k):''}</span></div></div>`).join('')}</div>
+      <div class="body"><div class="stats">${['outdoor','room','hot_water','compressor_frequency'].map(k=>`<div class="stat"><div class="label">${readings[k][0]}${k==='outdoor'?' · BT1':k==='room'?' · BT50':k==='hot_water'?' · BT7':''}</div><div class="value">${this.value(k)}<span class="unit">${this.available(this.state(k))?this.unit(k):''}</span></div></div>`).join('')}</div>
       <section class="panel schematic">
       <div class="scheme-scroll" tabindex="0" role="region" aria-label="Combined circuit diagram">
-      <svg class="landscape" viewBox="0 65 1000 355" role="img" aria-labelledby="scheme-title scheme-description">
-      <title id="scheme-title">Combined F750 refrigerant and hydraulic circuits</title><desc id="scheme-description">Extract air transfers heat to the evaporator. Refrigerant flows through the compressor, condenser and expansion valve. The condenser transfers heat across separate fluid channels into heating water serving space heating and the hot water tank. Paths are conceptual; flow is not measured.</desc>
-      <rect x="12" y="74" width="532" height="342" rx="18" fill="#f6faf9"/>
-      <rect x="552" y="74" width="436" height="342" rx="18" fill="#faf8f5"/>
-      
-      <!-- Refrigerant loop terminates on the left side of the shared exchanger. -->
-      <path class="pipe ref-low" d="M160 190V130H280"/>
-      <path class="pipe ref-high" d="M340 130H466V190M466 270V350H322"/>
-      <path class="pipe ref-low" d="M298 350H160V270"/>
-      <path class="pipe ${flow}" d="M160 190V130H466V350H160V270"/>
-      <!-- Water loop terminates on the right side: no shared fluid junction. -->
-      <path class="pipe hot" d="M518 190V130H885V212M735 130V266"/>
-      <path class="pipe cold" d="M885 260V374H518V270M735 334V374"/>
-      <!-- Air side is separate from the closed refrigerant loop. -->
-      <path class="air" d="M65 140V215H110M110 245H65V318"/>
-      <path d="M105 210L113 215L105 220M60 310L65 318L70 310" fill="none" stroke="#9db4bf" stroke-width="2"/>
-      <text class="muted" x="36" y="119"><title>Exhaust air</title>${this.value('exhaust_air')} ${this.unit('exhaust_air')}</text>
-      <text class="muted" x="36" y="361"><title>Leaving air</title>${this.value('leaving_air')} ${this.unit('leaving_air')}</text>
-      <rect class="node" x="112" y="190" width="96" height="80" rx="12"/>
-      <path d="M127 205L143 218L127 231L143 244L127 257M191 205L175 218L191 231L175 244L191 257" fill="none" stroke="#67aaa6" stroke-width="2"/>
-      <text class="muted" x="225" y="249"><title>Evaporator</title>${this.value('evaporator')} ${this.unit('evaporator')}</text><text x="225" y="272"><title>Estimated evaporator sensible heat</title>Q = ${this.heatValue('qEvaporator')}</text>
-      <circle class="node" cx="310" cy="130" r="30"/><path d="M299 143L325 130L299 117Z" fill="#9171ba"/>
-      <text class="muted" x="310" y="190" text-anchor="middle"><title>Compressor frequency</title>${this.value('compressor_frequency')} ${this.unit('compressor_frequency')}</text><text x="310" y="213" text-anchor="middle"><title>Estimated compressor power</title>P = ${this.heatValue('compressor')}</text>
-      <path class="node" d="M298 338L322 362V338L298 362Z"/>
-      
-      <!-- Condenser: two isolated channels and a thermal transfer interface. -->
-      <rect class="node" x="440" y="190" width="104" height="80" rx="12"/>
-      <path d="M466 190V270" stroke="#9171ba" stroke-width="5"/><path d="M518 190V270" stroke="#dd8051" stroke-width="5"/>
-      <path d="M486 201L498 212L486 223L498 234L486 245L498 258" fill="none" stroke="#b5c8d1" stroke-width="2"/>
-      <path d="M475 230H506L501 225M506 230L501 235" fill="none" stroke="#bd793e" stroke-width="1.5"/>
-      
-      <text x="560" y="321"><title>Estimated condenser heat</title>Q = ${this.heatValue('qCondenser')}</text>
-      <text class="muted" x="448" y="317" text-anchor="end"><title>Condenser</title>${this.value('condenser')} ${this.unit('condenser')}</text>
-      <text class="muted" x="540" y="186"><title>BT12 water outlet</title>${this.value('condenser_water_out')} ${this.unit('condenser_water_out')}</text>
-      <!-- Auxiliary heater and distribution are illustrative, not valve telemetry. -->
-      <rect class="node" x="592" y="109" width="65" height="42" rx="10"/><path d="M605 130H612L617 119L624 141L630 119L636 130H645" fill="none" stroke="#dd8051" stroke-width="2"/>
-      <text class="muted" x="624" y="176" text-anchor="middle"><title>Heater power</title>${this.value('heater_power')} ${this.unit('heater_power')}</text>
-      <text x="833" y="105" text-anchor="middle"><title>Supply</title>${this.value('supply')} ${this.unit('supply')}</text>
-      <rect class="node" x="833" y="212" width="104" height="48" rx="9"/>
-      <path d="M850 221V251M867 221V251M884 221V251M901 221V251M918 221V251" stroke="#dd8051" stroke-width="4"/>
-      
-      <rect class="node" x="695" y="245" width="80" height="107" rx="22"/>
-      <path class="pipe hot" d="M735 245V267Q763 280 735 291Q707 302 735 313"/><path class="pipe cold" d="M735 313V352"/>
-      <text class="muted" x="790" y="315"><title>Hot water</title>${this.value('hot_water')} ${this.unit('hot_water')}</text>
-      <text class="muted" x="878" y="398" text-anchor="middle"><title>Return</title>${this.value('return')} ${this.unit('return')}</text>
-      </svg>
-      <svg class="portrait" viewBox="0 0 340 800" role="img" aria-labelledby="portrait-title portrait-desc">
-      <title id="portrait-title">Combined F750 refrigerant and hydraulic circuits</title><desc id="portrait-desc">Portrait layout: refrigerant heat recovery above, heating water distribution below. Separate fluid channels at the central condenser transfer heat between the circuits.</desc>
-      <rect x="6" y="8" width="328" height="345" rx="18" fill="#f6faf9"/>
-      <rect x="6" y="357" width="328" height="435" rx="18" fill="#faf8f5"/>
-      
-      <path class="pipe ref-low" d="M70 160V105H146"/>
-      <path class="pipe ref-high" d="M194 105H270V320H213M127 320H70V289"/>
-      <path class="pipe ref-low" d="M70 271V226"/>
-      <path class="pipe ${flow}" d="M70 160V105H270V320H70V226"/>
-      <rect class="node" x="40" y="160" width="60" height="66" rx="12"/>
-      <path d="M50 172L61 184L50 196L61 211M89 172L78 184L89 196L78 211" fill="none" stroke="#67aaa6" stroke-width="2"/>
-      <text class="muted" x="115" y="209"><title>Evaporator</title>${this.value('evaporator')} ${this.unit('evaporator')}</text><text x="115" y="230"><title>Estimated evaporator sensible heat</title>Q = ${this.heatValue('qEvaporator')}</text>
-      <text class="muted" x="22" y="64"><title>Exhaust air</title>${this.value('exhaust_air')} ${this.unit('exhaust_air')}</text>
-      <path class="air" d="M26 71V185H39M39 208H22V239"/>
-      <text class="muted" x="115" y="265"><title>Leaving air</title>${this.value('leaving_air')} ${this.unit('leaving_air')}</text>
-      <circle class="node" cx="170" cy="105" r="24"/><path d="M161 116L184 105L161 94Z" fill="#9171ba"/>
-      <text class="muted" x="170" y="146" text-anchor="middle"><title>Compressor frequency</title>${this.value('compressor_frequency')} ${this.unit('compressor_frequency')}</text><text x="170" y="167" text-anchor="middle"><title>Estimated compressor power</title>P = ${this.heatValue('compressor')}</text>
-      <path class="node" d="M59 271L81 289H59L81 271Z"/>
-      <!-- The condenser bridges the stacked circuits with isolated channels. -->
-      
-      <rect class="node" x="127" y="301" width="86" height="78" rx="12"/>
-      <path d="M127 320H213" stroke="#9171ba" stroke-width="5"/><path d="M127 361H213" stroke="#dd8051" stroke-width="5"/>
-      <path d="M137 337L150 346L163 337L176 346L189 337L202 346" fill="none" stroke="#b5c8d1" stroke-width="2"/>
-      
-      <text class="muted" x="170" y="407" text-anchor="middle"><title>Condenser</title>${this.value('condenser')} ${this.unit('condenser')}</text>
-      <text class="muted" x="277" y="430" text-anchor="end"><title>BT12 water outlet</title>${this.value('condenser_water_out')} ${this.unit('condenser_water_out')}</text>
-      <text x="170" y="427" text-anchor="middle"><title>Estimated condenser heat</title>Q = ${this.heatValue('qCondenser')}</text>
-      <path class="pipe hot" d="M213 361H300V479H70V559M270 479V656"/>
-      <path class="pipe cold" d="M70 608V755H22V361H127M270 710V755H70"/>
-      <rect class="node" x="147" y="462" width="65" height="34" rx="9"/>
-      <path d="M157 479H163L169 470L176 488L184 470L190 479H201" fill="none" stroke="#dd8051" stroke-width="2"/>
-      <text x="170" y="524" text-anchor="middle"><title>Heater power</title>${this.value('heater_power')} ${this.unit('heater_power')}</text>
-      <rect class="node" x="29" y="559" width="82" height="49" rx="9"/>
-      <path d="M44 569V598M57 569V598M70 569V598M83 569V598M96 569V598" stroke="#dd8051" stroke-width="3"/>
-      <text class="muted" x="127" y="602"><title>Supply</title>${this.value('supply')} ${this.unit('supply')}</text>
-      <rect class="node" x="237" y="641" width="66" height="84" rx="18"/>
-      <path class="pipe hot" d="M270 641V656Q292 668 270 681Q248 693 270 701"/><path class="pipe cold" d="M270 701V725"/>
-      <text class="muted" x="91" y="697"><title>Hot water</title>${this.value('hot_water')} ${this.unit('hot_water')}</text>
-      <text class="muted" x="170" y="779" text-anchor="middle"><title>Return</title>${this.value('return')} ${this.unit('return')}</text>
-      </svg></div>
+      ${this.diagram(false,activity)}${this.diagram(true,activity)}</div>
       </section>
       <section class="panel controls"><h2>Comfort</h2><div class="control-grid">${this.control('heating','Heating adjustment')}${this.control('hot_water','Hot water mode')}</div><div class="notice" role="status" aria-live="polite"></div></section>
 
       <details id="details" class="more" ${this._detailsOpen || (!this._manual && this._discovered && !this._selectedDevice)?'open':''}><summary>Details</summary>
       ${!this._manual ? `<div class="discovery"><p>${esc(this._discoveryMessage)}</p>${this._devices?.length>1 ? `<label for="device">Heat pump</label><select id="device"><option value="">Choose a heat pump</option>${this._devices.map(d=>`<option value="${esc(d.id)}" ${d.id===(this._selectedDevice || this.config.device_id)?'selected':''}>${esc(d.name_by_user || d.name || d.model || d.id)}</option>`).join('')}</select>`:''}<button id="discover">Refresh discovery</button></div>`:''}
-      <div class="metrics">${['reference_air_flow','electrical_power','cop','operation'].map(k=>this.metric(k)).join('')}</div>
+      <div class="metrics">${['reference_air_flow','supply','electrical_power','cop','operation'].map(k=>this.metric(k)).join('')}</div>
+      <p>Arrows show normal flow. Animation is illustrative, not measured flow; QN10 selects heating or DHW. The common heater is upstream of both branches. BT30 is a backup thermostat, not a displayed temperature sensor. BT1/BT50 are outside/room sensors in the top cards.</p>
       <p>Q and P are estimates. Air-side Q excludes condensation/freezing heat. Condenser Q = evaporator Q + P; auxiliary heat is separate.</p>
       <p>P = f × [0.0161 + 0.000208 × (BT12 − 45)] kW. Air Q = 0.000335 × m³/h × ΔT.</p>
       </details></div></ha-card>`;

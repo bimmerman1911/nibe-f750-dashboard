@@ -10,7 +10,7 @@ The card excludes disabled entities and other integrations, scopes every match t
 | --- | --- | --- |
 | Outdoor | 40004 | BT1 outdoor temperature |
 | Indoor | 40033 | BT50 room temperature, system 1 |
-| Hot water | 40013, fallback 40014 | BT7 tank top, fallback BT6 charging |
+| Hot water | 40013 | BT7 tank display sensor; not substituted with BT6 |
 | Supply | 40008 | BT2 heating supply, system 1 |
 | Return | 40012 | BT3 return |
 | Extract air | 40025 | BT20 exhaust/extract air before recovery |
@@ -23,6 +23,10 @@ The card excludes disabled entities and other integrations, scopes every match t
 | Condenser water outlet | 40017 | BT12, before auxiliary heating |
 | Reference airflow | 43124 | `reference_air_speed_sensor`, reference airflow / airflow ref aliases; sensible-Q estimate requires physical volume/time units |
 | Airflow | 40050 | BS1, requires physical volume/time units (unitless readings are not assumed to be m³/h) |
+| Tank control temperature | 40014 | BT6, separate from BT7 |
+| Hot gas / suction | 40018 / 40022 | BT14 after compressor / BT17 before compressor |
+| Heating flow / return | 40047 / 40048 | BT61 / BT62 after buffer |
+| Heater outlet | Name only | Explicit BT63 designation, no numeric register guessed |
 | Heating adjustment | 47011 | Heating curve offset, system 1; writable `number` only |
 | Hot water mode | 47041 | Comfort mode; writable `select` or `number` only |
 
@@ -35,3 +39,5 @@ The register list documents the F750 parameter semantics; it does not guarantee 
 - [F750 register data, python-nibe](https://github.com/yozik04/nibe/blob/master/nibe/data/f750.csv): F750 database 8310, parameter IDs and descriptions (2020-06-24).
 
 Browser tests use registry fixtures representing that source format, including renamed entities, disabled entities, another integration, multiple devices, the reported `sensor.vp_current_compressor_frequency` naming pattern with an unknown parameter ID, target/limit exclusions and ambiguous-name rejection. Responsive layout checks cover 375, 390 and 430 pixel portrait widths in Chromium; these are not on-device Safari tests. Actual discovery on the owner's F750 has not yet been verified.
+
+Sensor locations and flow presentation: [manual-based schematic guide](schematic.md).

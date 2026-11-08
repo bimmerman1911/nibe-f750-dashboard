@@ -7,7 +7,7 @@ A Home Assistant custom Lovelace card for a NIBE F750 connected through **Home A
 ## First release
 
 - Compact light dashboard with outdoor, indoor, hot-water and compressor readings. The diagram uses values beside the components and simple `Q = … kW` / `P = … kW` annotations. Extra readings, estimate notes and discovery settings are under **Details**.
-- One combined refrigerant and hydraulic schematic with mapped temperatures and a shared condenser heat exchanger. Refrigerant and water paths stay separate. Moving markers indicate compressor operation only; water flow and branch selection are not inferred. On narrow cards and iPhone portrait screens, the schematic automatically becomes a vertical layout with heat recovery above heat distribution; no horizontal scrolling.
+- One combined refrigerant and hydraulic schematic with mapped temperatures and a shared condenser heat exchanger. Refrigerant and water paths stay separate. Static arrows show normal direction; animated air, refrigerant and water paths illustrate operation and reported heating/DHW priority. Motion is not a flow measurement. Compact BT sensor markers follow the [manual-based location guide](docs/schematic.md). On narrow cards and iPhone portrait screens, the schematic automatically becomes a vertical layout with heat recovery above heat distribution; no horizontal scrolling.
 - Manual heating adjustment and hot-water mode through mapped `number` / `select` entities. Values and limits come from Home Assistant. Every write asks for confirmation and reports service errors.
 - Automatic discovery by myUplink parameter ID, with a device-scoped measurement-name fallback for API variations (including `sensor.vp_current_compressor_frequency`). Renamed entities still match stable IDs or original names. No manual sensor list required.
 - Diagram annotations show compressor P estimated with the supplied frequency/BT12 formula, sensible evaporator Q from reference airflow, and condenser Q derived as their sum. Corrupt water-flow readings are excluded. See [heat calculations](docs/heat-calculations.md).
@@ -19,7 +19,7 @@ A Home Assistant custom Lovelace card for a NIBE F750 connected through **Home A
 1. Set up [the built-in myUplink integration](https://www.home-assistant.io/integrations/myuplink/) under **Settings → Devices & services**. Connect your F750 to your myUplink account first. Enter OAuth credentials in Home Assistant, never in this card or the repository.
 2. Available data and writable controls depend on the equipment, firmware, API and subscription. Some entities may need enabling. myUplink normally updates every 60 seconds; this is a cloud dashboard, not real-time telemetry.
 3. Copy `dist/nibe-f750-card.js` to `/config/www/nibe-f750-card.js`.
-4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.9.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
+4. Under **Settings → Dashboards → Resources**, add `/local/nibe-f750-card.js?v=0.10.0` as a **JavaScript module**. Enable Advanced Mode in your profile if Resources is hidden.
 5. Add a manual dashboard card with just:
 
 ```yaml
@@ -39,7 +39,7 @@ Manual mapping is an optional advanced override: providing `entities:` replaces 
 | Key | Meaning |
 | --- | --- |
 | `outdoor`, `room` | Outdoor and room temperature |
-| `hot_water` | Your selected domestic hot-water temperature sensor |
+| `hot_water`, `hot_water_charge` | BT7 tank display and BT6 tank control temperatures, kept separate |
 | `supply`, `return` | Heating-water flow and return temperatures |
 | `exhaust_air`, `leaving_air` | Extract air before recovery and discharge air after recovery |
 | `evaporator`, `condenser` | Evaporator and condenser refrigerant outlet (BT15 liquid line), if exposed |
@@ -48,6 +48,8 @@ Manual mapping is an optional advanced override: providing `entities:` replaces 
 | `electrical_power`, `cop` | Optional measured input power and separately calculated/measured COP |
 | `operation` | Reported operating mode |
 | `condenser_water_out` | BT12 water outlet temperature, used with actual compressor frequency for estimated P |
+| `hot_gas`, `suction` | BT14 compressor discharge and BT17 suction temperatures |
+| `heating_supply`, `heating_return`, `heater_out` | BT61/BT62 after-buffer temperatures and BT63 after immersion heater |
 | `air_flow` | BS1 airflow with volume/time units, for the sensible-only evaporator estimate |
 | `reference_air_flow` | Automatically discovers `sensor.vp_reference_air_speed_sensor` and equivalents; takes precedence for a clearly labeled reference-airflow sensible evaporator Q estimate |
 
