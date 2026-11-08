@@ -11,7 +11,7 @@ A small circle marks the measuring location. A leader connects it to the BT iden
 | Marker | Location |
 | --- | --- |
 | BT1 | Outdoor sensor, blue ambient panel with outdoor symbol |
-| BT50 | Room sensor, green ambient panel with house symbol |
+| C1 / C2 | Green indoor panels using the confirmed upstairs/downstairs room sensors; C1 falls back to the mapped BT50 room reading when needed |
 | BT20 | Inlet/extract air duct before evaporator |
 | BT21 | Outlet/discharge air duct after evaporator, outside refrigerant loop |
 | BT16 | Evaporator |
@@ -44,3 +44,7 @@ The compressor-power and heat estimates are unchanged; see [heat calculations](h
 Shower time at the DHW tank: [reported duration or approximate mixing estimate](shower-time.md).
 
 GP1 is shown on the common return to the condenser, with the reported heating-medium pump 1 speed in percent. Discovery uses the explicit measurement name (including `sensor.vp_speed_heating_medium_pump_1`), not the manual-speed setting. Its percentage is display-only and remains excluded from the heat calculations. The DHW duration is plain text immediately below the tank.
+
+The diagram header now also displays degree minutes (`sensor.vp_degree_minutes_2`) and the exact NIBE status (`sensor.vp_status`). Current inline power is followed by the configured maximum from `select.vp_set_max_electrical_add`, e.g. `0 kW (3 kW)`. These are display-only additions; degree-minute control is unchanged.
+
+The outdoor symbol uses the current HA weather condition. It prefers the integration's selected weather entity, otherwise a unique SMHI or sole weather entity. `weather_entity:` is an optional card override. Missing/ambiguous weather uses a neutral unknown icon rather than implying sunshine. The header wraps into rows on narrow screens. `room_c1`, `room_c2`, `degree_minutes`, `system_status` and `heater_limit` can also be supplied as optional manual entity mappings.

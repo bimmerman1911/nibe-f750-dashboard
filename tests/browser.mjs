@@ -13,6 +13,13 @@ try {
   assert.equal(await card.locator('[data-component="buffer"]').count(),0);
   assert.equal(await card.locator('[data-component="circulation-pump"]').count(),2);
   assert.equal(await card.locator('[data-shower] path').count(),0);
+  assert.match(await card.locator('.landscape [data-reading="degree_minutes"]').textContent(),/-284/);
+  assert.match(await card.locator('.landscape [data-reading="system_status"]').textContent(),/Heating/);
+  assert.match(await card.locator('.landscape [data-component="heater"]').textContent(),/0 kW \(3 kW\)/);
+  assert.equal(await card.locator('.landscape [data-weather-condition="partlycloudy"]').count(),1);
+  await page.evaluate(()=>{const c=document.querySelector('nibe-f750-card');window.demoHass.states['weather.demo']={state:'rainy',attributes:{}};c.hass=window.demoHass;});
+  assert.equal(await card.locator('.landscape [data-weather-condition="rainy"]').count(),1);
+  await page.evaluate(()=>{const c=document.querySelector('nibe-f750-card');window.demoHass.states['weather.demo']={state:'partlycloudy',attributes:{}};c.hass=window.demoHass;});
   const topology=await card.evaluate(c=>[...c.shadowRoot.querySelectorAll('svg')].map(svg=>{
     const previous=svg.style.display;svg.style.display='block';
     const onPath=(path,point)=>{let best=Infinity;for(let i=0;i<=1000;i++){const p=path.getPointAtLength(path.getTotalLength()*i/1000);best=Math.min(best,Math.hypot(p.x-point.x,p.y-point.y));}return best;};
@@ -28,9 +35,16 @@ try {
     svg.style.display=previous;return result;
   }));
   for(const t of topology) {
-    assert.deepEqual(t.sensors.slice().sort(),['BT1','BT50','BT3','BT6','BT7','BT12','BT14','BT15','BT16','BT17','BT20','BT21','BT61','BT62','BT63'].sort());
+    assert.deepEqual(t.sensors.slice().sort(),['BT1','C1','C2','BT3','BT6','BT7','BT12','BT14','BT15','BT16','BT17','BT20','BT21','BT61','BT62','BT63'].sort());
     for(const key of ['outletOutside','bt21OnAir','bt15OnLiquid','bt63OnCommon','commonHasHeater','branchesAfterHeater']) assert.equal(t[key],true,key);
   }
+  const headerMappings=await page.evaluate(async()=>{
+    const {discoverEntities}=await import('/dist/nibe-f750-card.js');
+    return discoverEntities(['sensor.vp_degree_minutes_2','sensor.vp_status','select.vp_set_max_electrical_add'].map(entity_id=>({entity_id,platform:'myuplink',device_id:'pump',unique_id:entity_id})),'pump').entities;
+  });
+  assert.equal(headerMappings.degree_minutes,'sensor.vp_degree_minutes_2');
+  assert.equal(headerMappings.system_status,'sensor.vp_status');
+  assert.equal(headerMappings.heater_limit,'select.vp_set_max_electrical_add');
   const extraSensors=await page.evaluate(async()=>{
     const {discoverEntities}=await import('/dist/nibe-f750-card.js');
     const entries=[['charge','40014'],['gas','40018'],['suction','40022'],['heating_out','40047'],['heating_back','40048']].map(([name,id])=>({platform:'myuplink',device_id:'pump',entity_id:`sensor.${name}`,unique_id:`cloud-${id}`}));

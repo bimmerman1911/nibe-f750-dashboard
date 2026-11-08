@@ -1,7 +1,8 @@
 /* NIBE F750 Dashboard — MIT license. Uses Home Assistant's built-in myUplink entities. */
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const readings = {
-  outdoor: ['Outdoor', '°C'], room: ['Indoor', '°C'], hot_water: ['Hot water', '°C'],
+  outdoor: ['Outdoor', '°C'], room: ['Indoor', '°C'], room_c1:['Indoor · C1','°C'], room_c2:['Indoor · C2','°C'],
+  degree_minutes:['Degree minutes',''],system_status:['Status',''],heater_limit:['Maximum inline power','kW'], hot_water: ['Hot water', '°C'],
   supply: ['Heating supply', '°C'], return: ['Heating return', '°C'],
   exhaust_air: ['Extract air', '°C'], leaving_air: ['Discharge air', '°C'],
   evaporator: ['Evaporator', '°C'], condenser: ['Condenser', '°C'],
@@ -15,10 +16,13 @@ const readings = {
 };
 // F750 parameter IDs; myUplink unique IDs are `${device_id}-${parameter_id}`.
 // References and compatibility notes: docs/discovery.md.
-const points = {pump_speed:[],outdoor:['40004'],room:['40033'],hot_water:['40013'],supply:['40008'],return:['40012'],exhaust_air:['40025'],leaving_air:['40026'],evaporator:['40020'],condenser:['40019'],compressor_frequency:['43136'],heater_power:['43084'],operation:['49994'],compressor_status:['43427','43435'],shower_minutes:[],condenser_water_out:['40017'],air_flow:['40050'],reference_air_flow:['43124'],hot_water_charge:['40014'],hot_gas:['40018'],suction:['40022'],heating_supply:['40047'],heating_return:['40048'],heater_out:[]};
+const points = {degree_minutes:[],system_status:[],heater_limit:[],pump_speed:[],outdoor:['40004'],room:['40033'],hot_water:['40013'],supply:['40008'],return:['40012'],exhaust_air:['40025'],leaving_air:['40026'],evaporator:['40020'],condenser:['40019'],compressor_frequency:['43136'],heater_power:['43084'],operation:['49994'],compressor_status:['43427','43435'],shower_minutes:[],condenser_water_out:['40017'],air_flow:['40050'],reference_air_flow:['43124'],hot_water_charge:['40014'],hot_gas:['40018'],suction:['40022'],heating_supply:['40047'],heating_return:['40048'],heater_out:[]};
 // API names can vary from the older F-series register catalog. Match only
 // explicit measurement names/BT designations, scoped to the selected device.
 const aliases = {
+  degree_minutes:[/(?:^| )degree minutes(?: [0-9]+)?$/],
+  system_status:[/^(?:vp )?status$/],
+  heater_limit:[/(?:^| )(?:set )?max(?:imum)? (?:electrical add|electrical addition|inline heater power)$/],
   pump_speed: [/(?:^| )speed heating medium pump 1$/, /(?:^| )heating medium pump (?:1 |gp1 )?speed$/, /(?:^| )gp1 speed$/],
   outdoor: [/(?:^| )outdoor temperature(?: bt1)?$/, /(?:^| )bt1(?: outdoor temperature)?$/],
   room: [/(?:^| )(?:room|indoor) temperature(?: bt50)?$/, /(?:^| )bt50(?: room temp(?:erature)?(?: s1)?)?$/],
@@ -57,12 +61,15 @@ export function discoverEntities(registry, deviceId, states = {}) {
   const entities = Object.fromEntries(Object.entries(points).map(([key,ids])=>{
     const byId = find(ids,key==='compressor_status'?['sensor','binary_sensor']:['sensor','number','select']);
     if(byId) return [key,byId];
-    const matches = rows.filter(e=>e.entity_id.startsWith('sensor.') && !/-raw$/.test(e.unique_id) &&
+    const matches = rows.filter(e=>e.entity_id.startsWith(key==='heater_limit'?'select.':'sensor.') && !/-raw$/.test(e.unique_id) &&
       !(key==='compressor_frequency' && [e.original_name,e.name,states[e.entity_id]?.attributes?.friendly_name,e.entity_id.slice(7)].some(name=>/\b(target|request|requested|min|max|minimum|maximum)\b/.test(normalize(name)))) &&
       [e.original_name,e.name,states[e.entity_id]?.attributes?.friendly_name,e.entity_id.slice(7)].some(name=>
         (aliases[key] || []).some(pattern=>pattern.test(normalize(name)))));
     return [key,matches.length===1 ? matches[0].entity_id : undefined];
   }).filter(([,id])=>id));
+  for(const [key,id] of Object.entries({degree_minutes:'sensor.vp_degree_minutes_2',system_status:'sensor.vp_status',heater_limit:'select.vp_set_max_electrical_add'})) {
+    if(rows.some(e=>e.entity_id===id))entities[key]=id;
+  }
   return {entities};
 }
 // Owner-supplied empirical power model: f in Hz, BT12 in °C, result in kW.
@@ -127,7 +134,7 @@ export class NibeF750Card extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     this.discover();
-    const ids = Object.values(this.config?.entities || {});
+    const ids = [...new Set([...Object.values(this.config?.entities || {}),'sensor.ovanvaning_temperature','sensor.nedervaning_temperature',...Object.keys(hass.states).filter(id=>id.startsWith('weather.'))])];
     const changed = !this._lastStates || ids.some(id => this._lastStates[id] !== hass.states[id]);
     this._lastStates = Object.fromEntries(ids.map(id => [id, hass.states[id]]));
     if (changed) this.render();
@@ -145,6 +152,9 @@ export class NibeF750Card extends HTMLElement {
       const ids = new Set(registry.filter(e=>e.platform==='myuplink').map(e=>e.device_id));
       const candidates = devices.filter(d=>ids.has(d.id));
       this._devices = candidates;
+      const weathers=registry.filter(e=>e.entity_id.startsWith('weather.')&&!e.disabled_by);
+      const smhi=weathers.filter(e=>e.platform==='smhi');
+      this._weather=smhi.length===1?smhi[0].entity_id:weathers.length===1?weathers[0].entity_id:null;
       const f750 = candidates.filter(d=>/f\s*750/i.test(`${d.model || ''} ${d.name || ''}`));
       const selected = this._selectedDevice || config.device_id || (f750.length===1 ? f750[0].id : candidates.length===1 ? candidates[0].id : null);
       const device = candidates.find(d=>d.id===selected);
@@ -166,7 +176,58 @@ export class NibeF750Card extends HTMLElement {
   static getStubConfig() { return {type:'custom:nibe-f750-card'}; }
   getCardSize() { return 12; }
   getGridOptions() { return {columns:24, min_columns:6, rows:12}; }
-  state(key) { return this._hass?.states[this.config?.entities?.[key]]; }
+  state(key) {
+    let id=this.config?.entities?.[key];
+    if(!id&&key==='room_c1')id=!this._manual&&this._hass?.states['sensor.ovanvaning_temperature']?'sensor.ovanvaning_temperature':this.config?.entities?.room;
+    if(!id&&key==='room_c2'&&!this._manual)id='sensor.nedervaning_temperature';
+    return this._hass?.states[id];
+  }
+  weatherState() {
+    const states=this._hass?.states||{};
+    const backend=Object.values(states).find(s=>s.attributes?.controller_domain==='nibe_f750'&&s.attributes?.forecast)?.attributes?.forecast?.weather_entity;
+    const candidates=Object.keys(states).filter(id=>id.startsWith('weather.'));
+    return states[this.config?.weather_entity||backend||this._weather||(candidates.length===1?candidates[0]:null)];
+  }
+  heaterLimit() {
+    const state=this.state('heater_limit');
+    if(!this.available(state))return '—';
+    const match=String(state.state).match(/^\s*(\d+(?:[.,]\d+)?)\s*(kw|w)?\s*$/i);
+    if(!match)return '—';
+    const n=Number(match[1].replace(',','.'))/((match[2]||state.attributes?.unit_of_measurement||'kW').toLowerCase()==='w'?1000:1);
+    return `${new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(n)} kW`;
+  }
+  weatherIcon() {
+    const current=this.weatherState(),condition=this.available(current)?current.state:'unavailable';
+    const sun='<circle cx="27" cy="33" r="7"/><path d="M27 20V23M27 43V46M14 33H17M37 33H40M18 24L20 26M34 40L36 42M18 42L20 40M34 26L36 24"/>';
+    const cloud='<path d="M16 40C9 40 10 29 18 30C18 18 34 18 36 29C47 27 49 41 40 41H16Z" fill="#dcebf5"/>';
+    let shape=cloud;
+    if(condition==='sunny')shape=sun;
+    else if(condition==='clear-night')shape='<path d="M35 21A13 13 0 1 0 39 43A14 14 0 0 1 35 21Z" fill="#dcebf5"/>';
+    else if(condition==='partlycloudy')shape=sun+cloud;
+    else if(['rainy','pouring','lightning-rainy'].includes(condition))shape=cloud+'<path d="M19 45L16 51M29 45L26 51M39 45L36 51"/>';
+    if(['lightning','lightning-rainy'].includes(condition))shape=(condition==='lightning'?cloud:shape)+'<path d="M29 32L22 44H29L24 54L37 39H30L34 32Z" fill="#d8ac55" stroke="#b78a38"/>';
+    if(['snowy','snowy-rainy'].includes(condition))shape=cloud+'<path d="M19 45V53M15 49H23M34 45V53M30 49H38"/>';
+    if(condition==='fog')shape=cloud+'<path d="M12 45H43M16 50H39"/>';
+    if(['windy','windy-variant'].includes(condition))shape='<path d="M12 29H34Q44 29 39 23Q35 19 32 24M12 35H40Q49 35 44 42Q40 46 37 41M15 42H28"/>';
+    if(condition==='exceptional')shape='<path d="M27 20L43 48H11Z"/><path d="M27 29V38M27 42V44"/>';
+    if(condition==='unavailable'||!['sunny','clear-night','partlycloudy','cloudy','rainy','pouring','lightning','lightning-rainy','snowy','snowy-rainy','fog','windy','windy-variant','exceptional'].includes(condition))shape=cloud+'<text x="27" y="36" text-anchor="middle" style="font-size:12px;stroke:none">?</text>';
+    return `<g data-weather-condition="${esc(condition)}" role="img" aria-label="Weather: ${esc(condition.replaceAll('-',' '))}" fill="none" stroke="#719bb9" stroke-width="1.8" stroke-linecap="round">${shape}</g>`;
+  }
+  ambientDeck(portrait) {
+    const house='<path d="M15 33L27 22L39 33V48H15Z" fill="none" stroke="#6d9b82" stroke-width="2"/>';
+    const tile=(id,key,x,y,width,color,icon='',height=78)=>{
+      const raw=this.value(key),status=key==='system_status';
+      const full=String(this.state(key)?.state||'—');
+      const text=status?esc(full.length>42?full.slice(0,39)+'…':full):raw;
+      return `<g data-reading="${key}" ${['BT1','C1','C2'].includes(id)?`data-sensor="${id}"`:''} class="ambient-panel" transform="translate(${x} ${y})"><title>${esc(readings[key][0])} · ${esc(full)}</title><rect width="${width}" height="${height}" rx="14" fill="${color}"/>${icon}<text x="${icon?52:16}" y="${height===54?18:26}" class="muted">${readings[key][0]}</text><text x="${width-12}" y="${height===54?18:26}" text-anchor="end" class="sensor-code">${id}</text><text x="${icon?52:16}" y="${height===54?40:53}" style="font-size:${status?13:18}px;font-weight:600">${text} ${this.available(this.state(key))?this.unit(key):''}</text></g>`;
+    };
+    return tile('BT1','outdoor',8,-57,portrait?184:190,'#edf5fb',this.weatherIcon())+
+      tile('C1','room_c1',portrait?208:214,-57,portrait?184:190,'#eef7f1',house)+
+      tile('C2','room_c2',portrait?8:420,portrait?33:-57,portrait?184:190,'#eef7f1',house)+
+      tile('DM','degree_minutes',portrait?208:626,portrait?33:-57,portrait?184:190,'#faf3e7')+
+      tile('','system_status',portrait?8:832,portrait?123:-57,portrait?384:318,'#f2f0f8','',portrait?54:78)+
+      (this.config.demo?`<text class="demo-label" x="${portrait?390:1140}" y="${portrait?188:30}" text-anchor="end">Demo</text>`:'');
+  }
   available(s) { return !!s && !['unknown','unavailable',''].includes(s.state); }
   value(key) {
     const s = this.state(key);
@@ -196,15 +257,13 @@ export class NibeF750Card extends HTMLElement {
     const arrow=(x,y,angle,color)=>`<path class="direction ${color}" d="M-5 -4L1 0L-5 4" transform="translate(${x} ${y}) rotate(${angle})"/>`;
     const sensor=(...args)=>this.sensor(...args);
     const compressor=(x,y)=>`<circle class="node" cx="${x}" cy="${y}" r="25"/><path d="M${x-9} ${y+11}L${x+14} ${y}L${x-9} ${y-11}Z" fill="#9171ba"/><text x="${x}" y="${y+48}" text-anchor="middle">${this.value('compressor_frequency')} ${this.unit('compressor_frequency')}</text><text x="${x}" y="${y+70}" text-anchor="middle" class="energy">P = ${this.heatValue('compressor')}</text>`;
-    const heater=(x,y)=>`<g data-component="heater"><title>EB1 · common immersion heater before QN10</title><rect class="node" x="${x-32}" y="${y-18}" width="64" height="36" rx="9"/><path d="M${x-23} ${y}H${x-16}L${x-10} ${y-10}L${x-3} ${y+10}L${x+4} ${y-10}L${x+10} ${y}H${x+23}" fill="none" stroke="#dd8051" stroke-width="2"/><text x="${x}" y="${y+43}" text-anchor="middle">${this.value('heater_power')} ${this.unit('heater_power')}</text></g>`;
+    const heater=(x,y)=>`<g data-component="heater"><title>EB1 · common immersion heater before QN10</title><rect class="node" x="${x-32}" y="${y-18}" width="64" height="36" rx="9"/><path d="M${x-23} ${y}H${x-16}L${x-10} ${y-10}L${x-3} ${y+10}L${x+4} ${y-10}L${x+10} ${y}H${x+23}" fill="none" stroke="#dd8051" stroke-width="2"/><text x="${x}" y="${y+43}" text-anchor="middle">${this.value('heater_power')} ${this.unit('heater_power')} (${this.heaterLimit()})</text></g>`;
     const valve=(x,y)=>`<g data-component="diverter"><title>QN10 · changeover valve, heating or DHW</title><circle class="node" cx="${x}" cy="${y}" r="9"/><text class="sensor-code" x="${x-14}" y="${y+32}">QN10</text></g>`;
     const radiator=(x,y)=>`<rect class="node" x="${x-40}" y="${y}" width="80" height="50" rx="9"/><path d="M${x-26} ${y+10}V${y+40}M${x-13} ${y+10}V${y+40}M${x} ${y+10}V${y+40}M${x+13} ${y+10}V${y+40}M${x+26} ${y+10}V${y+40}" stroke="#dd8051" stroke-width="3"/>`;
     const pump=(x,y,angle,tx,ty)=>`<g data-component="circulation-pump"><title>GP1 · heating-medium pump on the common return to the condenser</title><circle class="node" cx="${x}" cy="${y}" r="14"/><path d="M-7 -8L9 0L-7 8Z" fill="#5a96bf" transform="translate(${x} ${y}) rotate(${angle})"/><text x="${tx}" y="${ty}" text-anchor="middle">${this.value('pump_speed')} %</text></g>`;
-    const ambient=(id,key,x,width,color)=>`<g data-sensor="${id}" class="ambient-panel" transform="translate(${x} -57)"><title>${id} · ${readings[key][0]}</title><rect width="${width}" height="78" rx="14" fill="${color}"/>${key==='room'?'<path d="M15 33L27 22L39 33V48H15Z" fill="none" stroke="#6d9b82" stroke-width="2"/>':'<circle cx="27" cy="35" r="7" fill="none" stroke="#719bb9" stroke-width="2"/><path d="M27 21V24M27 46V49M13 35H16M38 35H41M17 25L19 27M35 43L37 45M17 45L19 43M35 27L37 25" stroke="#719bb9" stroke-width="2"/>'}<text x="52" y="26" class="muted">${readings[key][0]}</text><text x="${width-12}" y="26" text-anchor="end" class="sensor-code">${id}</text><text x="52" y="53" style="font-size:18px;font-weight:600">${this.value(key)} ${this.available(this.state(key))?this.unit(key):''}</text></g>`;
-    const shell=portrait?'0 -65 400 1175':'0 -65 1160 620';
+    const shell=portrait?'0 -65 400 1335':'0 -65 1160 620';
     const desc='BT20 inlet air and BT21 outlet air are on the air duct. BT14 hot gas, BT17 suction, BT15 liquid line and BT16 evaporator are on the refrigerant side. BT12 is before the common heater; BT63 is after it and before QN10. BT61 and BT62 are on the heating circuit after the buffer. BT7 and BT6 are tank sensors. Arrows show normal flow; motion is illustrative, not measured flow.';
-    return `<svg class="${portrait?'portrait':'landscape'}" viewBox="${shell}" role="img" aria-labelledby="${prefix}-title ${prefix}-desc"><title id="${prefix}-title">Combined F750 refrigerant and hydraulic circuits</title><desc id="${prefix}-desc">${desc}</desc>${portrait?`
-      ${ambient('BT1','outdoor',8,184,'#edf5fb')}${ambient('BT50','room',208,184,'#eef7f1')}${this.config.demo?'<text class="demo-label" x="390" y="31" text-anchor="end">Demo</text>':''}
+    return `<svg class="${portrait?'portrait':'landscape'}" viewBox="${shell}" role="img" aria-labelledby="${prefix}-title ${prefix}-desc"><title id="${prefix}-title">Combined F750 refrigerant and hydraulic circuits</title><desc id="${prefix}-desc">${desc}</desc>${this.ambientDeck(portrait)}<g transform="translate(0 ${portrait?160:0})">${portrait?`
       <rect x="6" y="35" width="388" height="410" rx="18" fill="#f6faf9"/><rect x="6" y="450" width="388" height="650" rx="18" fill="#faf8f5"/>
       ${pipe('refrigerant-suction','M100 210V130H195','ref-low',a.refrigerant)}
       ${pipe('refrigerant-discharge','M245 130H345V400H250','ref-high',a.refrigerant)}
@@ -240,7 +299,6 @@ export class NibeF750Card extends HTMLElement {
       ${this.showerLabel(315,1020,'middle')}${sensor('BT7','hot_water',350,870,380,825,'end')}
       ${sensor('BT6','hot_water_charge',350,970,380,1020,'end')}
     `:`
-      ${ambient('BT1','outdoor',8,190,'#edf5fb')}${ambient('BT50','room',214,190,'#eef7f1')}${this.config.demo?'<text class="demo-label" x="1130" y="-35" text-anchor="end">Demo</text>':''}
       <rect x="6" y="35" width="545" height="505" rx="18" fill="#f6faf9"/><rect x="560" y="35" width="590" height="505" rx="18" fill="#faf8f5"/>
       ${pipe('refrigerant-suction','M165 220V130H295','ref-low',a.refrigerant)}
       ${pipe('refrigerant-discharge','M345 130H466V220','ref-high',a.refrigerant)}
@@ -269,7 +327,7 @@ export class NibeF750Card extends HTMLElement {
       ${sensor('BT3','return',550,470,560,510)}<text x="590" y="345" class="energy">Q = ${this.heatValue('qCondenser')}</text>
       ${sensor('BT61','heating_supply',970,205,1030,190)}${sensor('BT62','heating_return',970,390,1030,405)}
       ${this.showerLabel(790,463,'middle')}${sensor('BT7','hot_water',835,335,875,325)}${sensor('BT6','hot_water_charge',835,415,875,445)}
-    `}</svg>`;
+    `}</g></svg>`;
   }
   render() {
     if (!this.config) return;
