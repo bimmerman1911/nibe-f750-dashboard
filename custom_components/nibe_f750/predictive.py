@@ -137,7 +137,7 @@ def plan(slots, room, tank, max_hz=84., model=None, beam=180, min_hz=20.):
                     else:
                         charging=False
                     on=hz>0
-                    previous_on=prev.mode!='off'
+                    previous_on=prev.step['hz']>0 if prev.step is not None else initial_mode!='off'
                     if on and not previous_on and prev.off<15-1e-6:
                         continue
                     if not on and previous_on and prev.run<30-1e-6 and not (prev.charging and prev.water>=m['tank_max_c']-.1):
