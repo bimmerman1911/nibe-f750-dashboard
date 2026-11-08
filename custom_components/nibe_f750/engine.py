@@ -58,7 +58,7 @@ def calculate(states, now, hour, persistent_shortfall=False, control=None):
     water_valid = water_valid and value(SUPPLY) is not None and value(REQUIRED) is not None
     shortfall = bool(heating and water_valid and value(SUPPLY) < value(REQUIRED)-2)
     increase = bool(heating and water_valid and not shortfall)
-    next2 = current2 + (-1 if e2 < -.3 or (persistent_shortfall and shortfall and e2 <= .3)
+    next2 = current2 + (-1 if e2 < -.3 or (persistent_shortfall and shortfall)
                         else 1 if e2 > .3 and increase else 0)
     # Economy is an intentional DHW deferral preset, not a lower reserve.
     # Only a valid forecast supervisor may defer; fallback restores Normal.

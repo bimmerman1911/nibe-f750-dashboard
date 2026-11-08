@@ -24,8 +24,10 @@ class Tests(unittest.TestCase):
         s=states_at(BASE,room=19.2)
         s[engine.C2].state='-10'
         self.assertIn((engine.C2,-9),engine.calculate(s,BASE,12)['writes'])
+        s[engine.C2].state='-9'
         s[engine.SUPPLY].state='25'
         self.assertNotIn(engine.C2,dict(engine.calculate(s,BASE,12)['writes']))
+        self.assertIn((engine.C2,-10),engine.calculate(s,BASE,12,persistent_shortfall=True)['writes'])
         s[engine.SUPPLY].state='36';s[engine.PRIORITY].state='Hot water'
         self.assertNotIn(engine.C2,dict(engine.calculate(s,BASE,12)['writes']))
 
