@@ -1,6 +1,6 @@
 """Persistent, serialized controller using HA's built-in myUplink setters."""
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 import time
 
@@ -29,7 +29,7 @@ class Controller:
         self.costs = {}
         self.last_accounting_save = 0
         self.history_task = None
-        self.data = {'enabled': True, 'last_cycle': 0, 'last_attempt': 0, 'release_dhw':False,'dhw_morning_pending':False}
+        self.data = {'enabled': True, 'last_cycle': 0, 'last_attempt': 0, 'release_dhw':False,'dhw_morning_pending':False,'dhw_morning_completed_date':None}
         self.status = 'Starting'
         self.targets = []
         self.telemetry = {}
@@ -159,11 +159,13 @@ class Controller:
                 self.saved_learning_revision = self.learner.revision
         except Exception:
             _LOGGER.exception('Adaptive learning update failed; retaining the last working model')
+        await self._observe_morning_completion(states,now)
         if self.predictor:
             try:
-                self.predictor.adaptive_model = {**self.learner.parameters(),'dhw_morning_pending':self.data['dhw_morning_pending']}
+                self.predictor.adaptive_model = {**self.learner.parameters(),'dhw_morning_pending':self.data['dhw_morning_pending'],'dhw_morning_completed':self._morning_completed(now)}
                 self.predictor.learning = self.learner.diagnostics()
                 self.predictor.offset_response = self.offset_learner.parameters()
+                self.predictor.command_not_before = max(now,float(self.data['last_cycle'])+902,float(self.data['last_attempt'])+902)
                 self.forecast = await asyncio.wait_for(self.predictor.async_update(states, now), timeout=30)
                 generated = self.forecast.get('generated_at')
                 if generated is not None and generated != self.last_prediction:
@@ -216,19 +218,47 @@ class Controller:
                             'reason':'Restoring Normal hot-water operation.' if self.data['release_dhw'] else 'Paused; hot water is under native/manual control.'}
             result = {'targets':self.targets, 'writes':restore_dhw(states) if self.data['release_dhw'] else []}
         else:
-            chosen = adaptive_request(self.forecast,states,now,{**self.forecast.get('model',{}),'dhw_morning_pending':self.data['dhw_morning_pending']}) if self.forecast.get('steps') else None
+            chosen = adaptive_request(self.forecast,states,now,{**self.forecast.get('model',{}),'dhw_morning_pending':self.data['dhw_morning_pending'],'dhw_morning_completed':self._morning_completed(now)}) if self.forecast.get('steps') else None
             if chosen is not None and chosen['dhw_morning_override']!=self.data['dhw_morning_pending']:
                 self.data['dhw_morning_pending']=chosen['dhw_morning_override']
                 await self.store.async_save(dict(self.data))
-            self.control = chosen or {'mode':'Thermostat fallback', 'reason':self.forecast.get('message','Prices/weather unavailable; using temperature control.')}
+            from .predictive import DEFAULTS
+            options=getattr(self.predictor,'options',{}) if self.predictor else {}
+            bounds={k:options.get(k,DEFAULTS[k]) for k in ('room_min_c','room_target_c','room_max_c')}
+            fallback_reason=self.forecast.get('message') or 'Prices/weather unavailable; using temperature control.'
+            if chosen is None and self.forecast.get('steps'):
+                fallback_reason='The current plan cannot be applied: it is stale, outside its command interval, or required live readings are unavailable.'
+            self.control = {**bounds,**(chosen or {'mode':'Thermostat fallback', 'reason':fallback_reason})}
             result = calculate(states, now, dt_util.now().hour,
-                self.short_since is not None and now-self.short_since >= 900, control=chosen)
+                self.short_since is not None and now-self.short_since >= 900, control=chosen,options=options)
             if result is None:
                 result = {'targets':[], 'writes':restore_dhw(states)}
                 self.status = 'Waiting for readings'
             else:
                 self.status = 'Write failed' if self.write_failed else 'Running'
             self.targets = result['targets']
+        self.control['command_not_before']=max(now,float(self.data['last_cycle'])+902,float(self.data['last_attempt'])+902)
+        self.control['pending_writes']=[{'entity':e,'requested':v} for e,v in result['writes']]
+        hold_until=number(self.control.get('hold_until')) or 0.
+        if self.data['enabled'] and self.control.get('locked') and hold_until>now:
+            # A C2-only write during the final minute of a modelled hold would
+            # reserve another full budget window ahead of the next joint action.
+            self.control['command_not_before']=max(self.control['command_not_before'],hold_until)
+            self.control['pending_writes']=[]
+            return
+        # Unchanged settings do not consume a cloud-write interval. Existing
+        # persisted gates remain honoured after an upgrade/reload.
+        if not result['writes']:
+            if self.write_failed:
+                self.write_failed=False
+                if self.status=='Write failed':
+                    self.status='Running'
+            # Keep hold decisions observable without reserving a native write.
+            if not self.decision_log or now-self.decision_log[-1]['time']>=900 or self.decision_log[-1]['control'].get('mode')!=self.control.get('mode'):
+                self._record_decision(now,[],states)
+                if self.predictor:
+                    await self.forecast_store.async_save({'records':self.prediction_log,'decisions':self.decision_log})
+            return
         if now-float(self.data['last_cycle']) < 902 or now-float(self.data['last_attempt']) < 902:
             return
         self.data['last_cycle'] = now
@@ -263,12 +293,45 @@ class Controller:
                 await self.store.async_save(dict(self.data))
 
         self.write_failed = failed
-        self.decision_log=(self.decision_log+[{'time':now,'control':dict(self.control),
-            'targets':self.targets[:],'attempts':attempts,
-            'rooms':[states[e].state if e in states else None for e in
-                ('sensor.ovanvaning_temperature','sensor.nedervaning_temperature')]}])[-512:]
+        self.control['command_not_before']=max(self.clock(),float(self.data['last_cycle'])+902,float(self.data['last_attempt'])+902)
+        self._record_decision(now,attempts,states)
         if self.predictor:
             try:
                 await self.forecast_store.async_save({'records':self.prediction_log,'decisions':self.decision_log})
             except Exception:
                 _LOGGER.exception('Could not save adaptive decision history')
+
+    def _morning_completed(self, now):
+        today=datetime.fromtimestamp(now,self.accounting.zone).date().isoformat()
+        return self.data.get('dhw_morning_completed_date')==today
+
+    async def _observe_morning_completion(self, states, now):
+        # Record a measured completion, never a forecasted one. A new local date
+        # naturally starts a new goal; ordinary post-06:00 draw-off must not
+        # retroactively mark this morning's already-completed goal as missed.
+        if not self.data['enabled']:
+            return
+        local=datetime.fromtimestamp(now,self.accounting.zone)
+        today=local.date().isoformat()
+        if local.hour<6 or self.data.get('dhw_morning_completed_date')==today:
+            return
+        readings=[states.get(e) for e in ('sensor.vp_hot_water_top_bt7','sensor.vp_hot_water_charging_bt6')]
+        values=[number(s.state) if fresh(s,now) else None for s in readings]
+        if any(v is None or not 10<=v<=80 for v in values):
+            return
+        ceiling=number(self.forecast.get('model',{}).get('tank_max_c'))
+        if ceiling is None:
+            ceiling=number(self.learner.parameters().get('tank_max_c'))
+        if ceiling is not None and sum(values)/2>=ceiling-.5:
+            self.data['dhw_morning_completed_date']=today
+            await self.store.async_save(dict(self.data))
+            if self.predictor:
+                # Completion changes the morning constraint, so don't retain
+                # an old forced-recovery plan until the usual price refresh.
+                self.predictor.last_refresh=None
+
+    def _record_decision(self, now, attempts, states):
+        self.decision_log=(self.decision_log+[{'time':now,'control':dict(self.control),
+            'targets':self.targets[:],'attempts':attempts,
+            'rooms':[states[e].state if e in states else None for e in
+                ('sensor.ovanvaning_temperature','sensor.nedervaning_temperature')]}])[-512:]

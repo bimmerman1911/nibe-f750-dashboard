@@ -37,7 +37,7 @@ def fresh(state, now):
     return reported is not None and -5 <= now - reported.timestamp() <= 1800
 
 
-def calculate(states, now, hour, persistent_shortfall=False, control=None):
+def calculate(states, now, hour, persistent_shortfall=False, control=None, options=None):
     """Return targets and at most three setting requests, or None for missing data."""
     if not all(fresh(states.get(e), now) and number(states[e].state) is not None for e in REQUIRED_READINGS):
         return None
@@ -47,7 +47,10 @@ def calculate(states, now, hour, persistent_shortfall=False, control=None):
     def value(entity):
         state = states.get(entity)
         return number(state.state) if state else None
-    target1 = 20
+    # Fallback is an ordinary stable thermostat, using the configured preference.
+    # A lower comfort minimum is a planning constraint, not a price switch.
+    preferred=number((options or {}).get('room_target_c',20.))
+    target1=preferred if preferred is not None and 5<=preferred<=35 else 20.
     if control is not None:
         target1 = float(control['target_c'])
     target2 = target1

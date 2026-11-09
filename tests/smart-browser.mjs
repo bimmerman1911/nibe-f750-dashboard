@@ -99,7 +99,7 @@ try {
     document.querySelector('nibe-f750-smart-card').hass=window.smartHass;
   });
   assert.equal(await card.getByText('Adaptive control',{exact:true}).count(),1);
-  assert.equal(await card.getByText('Current target 20.4 °C',{exact:true}).count(),2);
+  assert.match(await card.locator('[data-comfort]').textContent(),/Preferred 20.4 °C/);
   assert.equal(await card.getByText('Heating ahead of future demand and prices',{exact:true}).count(),1);
   assert.equal(await card.getByText(/Learning your home/).count(),1);
   assert.equal(await card.getByText(/Recommendations are recorded for validation/).count(),0);
@@ -108,7 +108,10 @@ try {
     const now=Date.now()/1000;
     const history=Array.from({length:96},(_,i)=>({start:now-43200+i*900,end:now-43200+(i+1)*900,price:.8+.5*Math.sin(i/8),inline_kw:i===4?.5:i===60?1:0,predicted_kw:i%24<12?1.3:0,actual_kw:i<48&&i!==12?(i%24<14?1.1:.15):null,action:i%24<12?'heat':'off'}));
     window.smartHass.states['sensor.nibe_electricity_history']={state:'Recording',attributes:{controller_domain:'nibe_f750',electricity:{updated_at:now,timezone:'Europe/Stockholm',history,week:[{date:'2026-11-02',actual:20,baseline:25,covered_hours:24},{date:'2026-11-03',actual:18,baseline:22,covered_hours:24},{date:'2026-11-04',actual:8,baseline:10,covered_hours:4},{date:'2026-11-05',actual:999,baseline:999,covered_hours:4}]}}};
-    window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast.steps=[{start:now+70*900-43200,end:now+71*900-43200,compressor_kw:1,inline_kw:2,price:1,outdoor:5,action:'dhw',room:20,water:49}];
+    window.jointControl={mode:'Adaptive',reason:'Using stored warmth during expensive prices',target_c:20,room_min_c:18,room_max_c:20.5,offset_c1:4,command_not_before:now+600,dhw:'Normal'};
+    window.smartHass.states['switch.nibe_smart_control'].attributes.control=window.jointControl;
+    window.smartHass.states['select.vp_comfort_mode']={state:'Normal',attributes:{}};
+    Object.assign(window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast,{generated_at:now,planner:'joint',model:{room_min_c:18,room_target_c:20,room_max_c:20.5},steps:[{start:now,end:now+900,compressor_kw:1,inline_kw:0,price:1,outdoor:5,action:'heat',dhw_mode:'Normal',offset:4,room:20,water:49},{start:now+70*900-43200,end:now+71*900-43200,compressor_kw:1,inline_kw:2,price:1,outdoor:5,action:'dhw',dhw_mode:'Normal',room:20,water:49}]});
     const c=document.querySelector('nibe-f750-smart-card');c._error='';c.hass=window.smartHass;
   });
   assert.equal(await card.locator('.weekly-costs tbody tr').count(),7);
@@ -122,10 +125,34 @@ try {
   assert.deepEqual(await card.locator('rect[data-inline-kw]').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('fill'))),['#d59a58','#d59a58','#d59a58']);
   assert.match(await card.locator('rect[data-inline-kw="2"] title').textContent(),/Inline estimate 2 kW/);
   assert.ok(await card.locator('rect:not([data-inline-kw])').evaluateAll(nodes=>nodes.every(n=>n.getAttribute('fill')!=='#d59a58')));
+  assert.match(await card.locator('[data-comfort]').textContent(),/Comfort 18–20.5 °C · preferred 20 °C/);
+  assert.match(await card.locator('[data-offset]').textContent(),/Offset 1 → 4 · Next permitted update/);
+  assert.equal(await card.locator('[data-dhw]').textContent(),'DHW Normal · charging permitted');
+  assert.equal(await card.locator('[data-plan-inactive]').count(),0);
   const actualPath=await card.locator('[data-series="actual"]').getAttribute('d');
   assert.equal((actualPath.match(/M/g)||[]).length,2); // Missing quarter-hour breaks the line.
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   assert.ok(await card.locator('[data-series="actual"]').evaluate(p=>p.getBBox().x+p.getBBox().width<=p.ownerSVGElement.viewBox.baseVal.width/2));
+  await page.evaluate(()=>{
+    window.smartHass.states['switch.nibe_smart_control'].attributes.control={...window.jointControl,mode:'Thermostat fallback',reason:'Hourly weather is unavailable; preserving configured comfort.'};
+    document.querySelector('nibe-f750-smart-card').hass=window.smartHass;
+  });
+  assert.equal(await card.getByText('Hourly weather is unavailable; preserving configured comfort.',{exact:true}).count(),1);
+  assert.equal(await card.getByText('Using temperature control while the forecast planner is unavailable.',{exact:true}).count(),0);
+  assert.equal(await card.locator('[data-plan-inactive]').count(),1);
+  assert.equal(await card.locator('[data-series="predicted"]').getAttribute('stroke-dasharray'),'4 4');
+  assert.ok(await card.locator('rect[data-schedule="inactive"]').evaluateAll(nodes=>nodes.length>0&&nodes.every(n=>n.getAttribute('fill')==='#e1e9ed')));
+  await page.evaluate(()=>{
+    window.smartHass.states['switch.nibe_smart_control'].attributes.control=window.jointControl;
+    window.smartHass.states['switch.nibe_smart_control'].state='off';
+    document.querySelector('nibe-f750-smart-card').hass=window.smartHass;
+  });
+  assert.equal(await card.locator('.badge').textContent(),'Paused');
+  assert.equal(await card.locator('[data-plan-inactive]').count(),1);
+  await page.evaluate(()=>{
+    window.smartHass.states['switch.nibe_smart_control'].state='on';
+    document.querySelector('nibe-f750-smart-card').hass=window.smartHass;
+  });
   await page.screenshot({path:'docs/electricity-mobile.png',fullPage:true});
   await page.setViewportSize({width:1280,height:1200});
   await page.screenshot({path:'docs/electricity-desktop.png',fullPage:true});

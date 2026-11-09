@@ -1,5 +1,7 @@
 # Adaptive Smart Control — v0.17
 
+> Historical design. See [joint adaptive control in v0.21](joint-control.md) for the current planner, learning checks, objective and DHW policy. Existing installation and native-control boundaries still apply.
+
 This version **changes heat-pump settings automatically using its forecast plan**. It starts operating from initial estimates and learns locally as the house runs. There is no recommendation-only stage, external AI service, training download, new enable switch or approval before each write.
 
 Update the installed Integration through Marketplace, restart Home Assistant and refresh the browser. The existing enable/pause selection is preserved. No files or helpers need installing. Control evaluates immediately when readings are available; it has no fixed startup delay. The normal 15-minute setting cadence remains.

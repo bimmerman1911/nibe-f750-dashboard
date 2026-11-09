@@ -1,5 +1,7 @@
 # Predictive and adaptive control
 
+> See [joint adaptive control in v0.21](joint-control.md) for the current live implementation. This page records the earlier forecast-planner design.
+
 The v0.16 recommendation-only implementation is superseded by [active adaptive control in v0.17](adaptive-control.md). The planner now drives the existing heating-offset and DHW setters automatically while learning your home's response locally.
 
 ## Forecast sources

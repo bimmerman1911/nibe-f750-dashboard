@@ -1,5 +1,7 @@
 # Direct heating-offset planning
 
+> Historical design through v0.20.3. The live two-stage planner and budget fallback described here are superseded by [joint adaptive control in v0.21](joint-control.md). The native write limits and room-based secondary priority remain in place.
+
 Version 0.19 replaces the heating/coasting target-temperature mapper with receding-horizon native offset planning. The usual room target is 20°C; configured minimum/maximum temperatures (initially 19–20.5°C) are comfort bounds, not two switching targets.
 
 The existing thermal scheduler first reserves compressor time for DHW using prices, weather and predicted hot-water demand. A second beam search evaluates native heating-offset sequences over those intervals. From v0.19.1, each decision evaluates the full set of native offset values between the entity's minimum and maximum, at its supported step size. A permitted update can move directly to the selected value; there is no one-step-per-cycle restriction. Five-minute-or-shorter simulation substeps predict supply temperature, accumulated degree minutes, native heat response, estimated electrical demand and delayed heat delivery to the house. Search penalises comfort violations, auxiliary use and unnecessary setting changes, as well as electricity cost and insufficient heat at the end of the horizon. It is a bounded approximate search, not a guarantee of globally optimal cost or a perfect native-firmware emulator.

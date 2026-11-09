@@ -1,15 +1,15 @@
 # NIBE F750 Smart Control
 
-One **HACS Integration** installs the background controller and both dashboard cards. It uses Home Assistant's built-in **myUplink** connection. No YAML package, extra credentials, manual JavaScript copying or separate card download is required.
+One **Marketplace (HACS) integration** installs the adaptive controller and both dashboard cards. It uses Home Assistant's built-in **myUplink** connection. No separate Java service, YAML controller package, model server or manual JavaScript copying is required.
 
 ![Circuit diagram](docs/dashboard.png)
 
-## Install
+## Install or update
 
 1. Set up Home Assistant's built-in **myUplink** integration for your F750.
-2. Add `https://github.com/bimmerman1911/nibe-f750-dashboard` to HACS custom repositories with category **Integration**. Install **NIBE F750 Smart Control**.
-3. Restart Home Assistant, then go to **Settings → Devices & services → Add integration → NIBE F750 Smart Control**.
-4. Refresh the browser. The integration automatically registers both dashboard cards. Add either or both:
+2. Add `https://github.com/bimmerman1911/nibe-f750-dashboard` as a custom repository with category **Integration**, then install **NIBE F750 Smart Control**.
+3. Restart Home Assistant. For a new installation, add **NIBE F750 Smart Control** under Settings → Devices & services.
+4. Refresh the browser and add either or both cards:
 
 ```yaml
 type: custom:nibe-f750-card
@@ -19,71 +19,56 @@ type: custom:nibe-f750-card
 type: custom:nibe-f750-smart-card
 ```
 
-Control is enabled by default after setup and checks readings immediately. There is **no fixed startup delay**; saved timestamps still enforce the normal write interval after a recent request. Pause/Resume is available in the Smart Control card and the integration's control switch. Paused state and write timestamps survive restarts. No dashboard needs to remain open.
+Existing installations only need the Marketplace update, HA restart and browser refresh. Options, learned state, history, pause state and cloud-write timestamps are retained. There is no trial activation or training-completion gate. New installations start enabled; an existing paused installation remains paused.
 
-The controller uses the owner's confirmed room entities: upstairs C1 `sensor.ovanvaning_temperature`, downstairs C2 `sensor.nedervaning_temperature`, existing `vp_*` myUplink controls, and `sensor.nordpool_kwh_se3_sek_3_10_025`. Other installations need equivalent entity names; configurable source selection is not included yet. Existing diagram sensor discovery remains automatic. Add SMHI through HA for hourly forecasts in the Smart Control card.
+The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
-## Migrate from the earlier Dashboard/YAML installation
+## Joint adaptive control — v0.21
 
-1. Disable the old **Smart thermostat**, **Set target temp**, **DHW Optimization** automations and pause the old NIBE controller.
-2. Delete `/config/packages/nibe_f750_trial.yaml` if it exists. Remove any explicit include of that file from `configuration.yaml`; a general packages include can stay. Check configuration.
-3. Remove the old HACS **Dashboard** installation and re-add this repository as an **Integration**, then install it.
-4. Restart HA, add the integration under Devices & services and refresh the browser. Existing card YAML/types remain valid.
+The controller now plans **heating offsets and DHW settings together**, simulating the commands it can actually apply. This replaces the earlier ideal heat schedule followed by a separate offset translation.
 
-The new integration detects the old registered YAML script service and **does not write** while they remain loaded. Remove the package and restart, rather than merely pausing it. This avoids two competing controllers. Existing number/comfort settings remain on the pump throughout migration.
+- Optimises using published prices, hourly weather, stored warmth, observed heat response, degree minutes and compressor capacity. An 18°C minimum creates real flexibility; 20°C is a preference rather than a mandatory horizon-end target.
+- Calibrates attainable supply from observed heating operation. An unreachable primary flow-temperature request is not assumed to create more heat at a saturated compressor.
+- Plans Normal/Economy with native DHW thresholds and learned usage. It can make a limited reserve charge, pause while a later charge remains restartable, then finish for the daily 06:00 full-charge objective.
+- Learns from measured heating/cooling and hot-water windows, with explicit coverage and uncertainty. Rejects discontinuities and prevents controller-induced stops from being learned as native full-tank stops.
+- Models held settings until the next permitted cloud update. Unchanged settings do not consume a new write interval. Existing limits remain: at most three setting attempts per rolling 15 minutes, with normal batches at least 902 seconds apart and durable reservations before calls.
+- Uses shorter available price/weather horizons when tomorrow is unpublished. On slower hardware, a reduced-search continuation completes the horizon instead of repeatedly abandoning a heavy search.
 
-Standard storage-mode dashboard resources are registered automatically, including removal of this project's old `/local/` and `/hacsfiles/` card resources. For YAML-mode dashboards, the integration loads its module through HA's frontend API; remove any old NIBE resource URLs from your YAML so an outdated card is not loaded alongside it.
+The Smart Control card shows the actual decision/fallback reason, comfort bounds and preferred temperature, actual → selected offset, next permitted update and DHW permission. An archived forecast is clearly marked inactive while the controller is paused or using temperature-control fallback.
 
-## Adaptive Smart Control (v0.17)
+The agreed room rule remains: **C1 supply shortfall can restrict C2 only when C2's room is warmer than C1**. The dependency is internal, not a separate dashboard topic. Native NIBE protections, actual compressor/inline-heater operation, defrost and hygiene remain pump-owned.
 
-**The learned forecast plan now changes settings automatically.** Update through Marketplace, restart HA and refresh the browser. Existing integrations and card configurations keep working. No YAML, training file, extra model service or shadow-mode activation is needed.
+[Review findings, new model, validation and limitations](docs/joint-control.md)
 
-- Learns cooling/heating response and heat delay from actual temperatures and heat-pump operation. Parameters persist across restarts.
-- Learns an hourly hot-water demand profile and effective tank charging response.
-- Plans heating and DHW using hourly weather and upcoming electricity prices, stored heat, available compressor capacity and estimated auxiliary need.
-- Applies the current schedule through planned native heating offsets within room comfort bounds. For DHW, Normal enables charging and Economy deliberately defers it; a low Economy preset is supported. Data/forecast failure or Pause restores Normal at the next permitted update.
-- Starts from estimates immediately and refines them while operating. It automatically falls back to fixed-20°C thermostat control when forecasts or a feasible plan are unavailable.
-- Keeps the established write cadence: changed settings only, at most three setting attempts per rolling 15 minutes, with persisted timestamps. Native NIBE control owns actual compressor/heater operation, defrost and hygiene.
+## Data and configuration
 
-The card shows **Adaptive control** or **Temperature control** (fallback), the current targets, price/schedule outlook and learning progress. Circuit dependencies remain fixed internal constraints. Learning state is not an enable/disable gate.
+The controller uses the owner's established room sources (`sensor.ovanvaning_temperature`, `sensor.nedervaning_temperature`), `vp_*` myUplink entities and `sensor.nordpool_kwh_se3_sek_3_10_025`. The circuit diagram's sensor discovery remains automatic. Other installations currently need equivalent backend source names; configurable source mapping is not included.
 
-[Model, configuration, diagnostics and limitations](docs/adaptive-control.md). This is an active first adaptive supervisor; it does not claim metered COP, perfect prediction or globally optimal cost. No GPU, AI subscription or direct HA access is needed for local learning.
+Use an hourly HA weather entity, preferably SMHI. Configure weather and indoor/DHW bounds through the integration's options. Saving reloads the integration automatically. A lower minimum permits coasting; fallback temperature control uses the configured preferred temperature and Normal DHW.
 
-## Direct offset planning (v0.19)
+The 06:00 objective is a best-effort reserve policy in HA's local timezone. Normal permits charging but cannot force a native start above its threshold, create unavailable capacity or recover instantly after a large unexpected draw. A predicted shortfall is shown. After a measured morning completion, subsequent normal draw-off does not falsely restart a missed-morning recovery.
 
-Adaptive control now searches native heating-offset sequences instead of converting heating/coasting periods into 19/20°C targets. The search predicts supply temperature, degree-minute backlog, compressor/auxiliary demand and delayed room response. Prices, weather and indoor comfort bounds determine which sequence is selected. Room temperature remains a comfort constraint; the normal target stays stable.
+No dedicated F750 meter is assumed. Electrical power uses the owner's compressor frequency/BT12 formula plus reported inline power. Thermal output, COP, forecast cost and the ordinary-thermostat comparison are estimates; neither metered COP nor proven bill savings are claimed.
 
-From v0.19.1, offset decisions can jump directly across the native range in one write; only the write timing is limited.
+## Cards and history
 
-The native-response model learns from observed operating data and persists alongside the house model. The existing fixed circuit relationship, DHW reservation and cloud-write cadence remain in place. Missing required offset/degree-minute data uses ordinary 20°C temperature control with Normal DHW, without the old price-triggered 19°C rule. [Operation and modelling assumptions](docs/offset-control.md).
+The light, portrait-friendly combined circuit diagram includes positional temperatures, operation animations, Q/P, estimated COP and shower minutes.
 
-Update through Marketplace, restart HA and refresh the browser. No YAML, activation step or external model service.
+Prices & schedule spans the past 12 hours and next 12 hours, with 15-minute power estimates and orange predicted inline-heater markers. The separate weekly area compares recorded estimated cost against a modelled ordinary 20°C thermostat with Normal DHW. Future days and unavailable history remain blank. Recorded predictions stay as issued.
 
-## Scheduled DHW and morning reserve (v0.20)
-
-Normal now follows the current DHW reservation, with low-reserve/necessary-charge exceptions and a daily 06:00 full-charge objective. A live failsafe enables Normal in time for a conservative charge estimate. Demand prediction uses the existing learned hourly usage profile; the power forecast now accounts for native charging thresholds and learned compressor fraction. [Operation and physical limits](docs/dhw-control.md).
-
-## Recovery planning (v0.20.1)
-
-If strict comfort/terminal constraints yield no schedule, the planner now searches an explicit recovery trajectory instead of immediately abandoning optimisation. Recovery prioritises reducing predicted comfort/reserve shortfalls and restoring the normal targets over price. It reports **Recovery plan**; it does not change configured temperature limits or unblock auxiliary heat. The secondary circuit can recover while upstairs is below target when measured supply is sufficient; real supply shortfalls and DHW priority still prevent an increase.
-
-From v0.20.3, C1 supply shortfall suppresses C2 only when the C2 room is warmer than C1. A colder or equally cold C2 can recover toward the shared indoor target during heating.
-
-## Cards and calculations
-
-The existing light, portrait-friendly combined refrigerant/hydraulic circuit card is unchanged. It shows positional temperatures, animated operation, Q/P and approximate shower minutes.
-
-From v0.18, **Prices & schedule** shows the past 12 hours and next 12 hours, with 15-minute predicted and observed power lines. A separate weekly area compares recorded estimated electricity cost against a modelled ordinary 20°C thermostat with Normal DHW. Future days stay blank. Available Recorder history is imported automatically; missing data is not invented. [Calculations, history and comparison basis](docs/electricity-history.md).
-
+- [Electricity history and comparison basis](docs/electricity-history.md)
 - [Sensor discovery](docs/discovery.md) and [manual-based schematic](docs/schematic.md)
 - [Heat calculations](docs/heat-calculations.md) and [shower estimates](docs/shower-time.md)
-- [Planning model and limits](docs/smart-control.md)
 - [Controller and migration](docs/live-control.md)
+
+## Older YAML/card installations
+
+Disable the old Smart thermostat, Set target temp and DHW Optimization automations. Remove the old `nibe_f750_trial.yaml` package and any explicit include of that file. Replace the old Dashboard-category installation with this Integration-category repository, restart HA, add the integration and refresh the browser. The integration refuses competing writes while the old script-specific service remains loaded. Existing card types remain valid.
 
 ## Development
 
-`npm run build` regenerates the standalone distributable and identical integration frontend. `npm run check` verifies both copies. Run `python -m http.server 8080` for `/demo/` and `/demo/smart.html`.
+`npm run build` generates both identical bundled frontends. `npm run check` verifies them. Run `python -m http.server 8080` for `/demo/` and `/demo/smart.html`; browser checks use Playwright and `npm test`.
 
-Run `python tests/adaptive_test.py` for learning and active control, `python tests/predictive_test.py` for price/weather/model/source checks, `python tests/integration_test.py` for policy/runtime tests and `python tests/accounting_test.py` for power, costs and history. The archived package regression checks need PyYAML/Jinja2 (`python tests/control_test.py`). Browser checks use Playwright and a running preview server (`npm test`). CI also runs HA's hassfest validation.
+Python tests cover the native response, joint scenarios, learning quality, command timing, morning reserve/DST, recovery, accounting, source parsing and archived policy regressions. The archived package tests require Jinja2/PyYAML. CI runs these checks plus Home Assistant hassfest.
 
-Validation uses deterministic HA-shaped fixtures and browsers; installation on the owner's HA instance has not been verified remotely. Independent community project; not affiliated with NIBE/myUplink. MIT licensed.
+Validation uses deterministic HA-shaped fixtures and browsers; operation on the owner's HA instance has not been verified remotely. Independent community project; not affiliated with NIBE/myUplink. MIT licensed.

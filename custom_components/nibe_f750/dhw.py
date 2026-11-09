@@ -11,7 +11,7 @@ def next_deadline(now, zone):
     return deadline.timestamp()
 
 
-def policy(tank, charging, scheduled, now, model):
+def policy(tank, charging, scheduled, now, model, *, allow_pause=False):
     """Normal only for the current reservation or a documented reserve override."""
     zone=model.get('timezone','Europe/Stockholm')
     full=model['tank_max_c']-.5
@@ -33,18 +33,26 @@ def policy(tank, charging, scheduled, now, model):
         lead=.5+(quarter+1)*.25
         if recovered>=required:
             break
-    morning=tank<full and (deadline-now<=lead*3600 or model.get('dhw_morning_pending',False))
+    completed=bool(model.get('dhw_morning_completed',False))
+    pending=model.get('dhw_morning_pending',False) and not completed
+    morning=tank<full and (deadline-now<=lead*3600 or pending)
     # At/after 06:00, retain recovery if the target was missed; don't abandon it
     # just because the deadline advanced to tomorrow.
     local=datetime.fromtimestamp(now,ZoneInfo(zone))
-    overdue=6<=local.hour<8 and tank<full
+    overdue=6<=local.hour<8 and tank<full and not completed
     low=tank<model['tank_min_c']+2 or deferred<model['tank_min_c']+2
-    finish=charging and tank<full
-    reason='06:00 full-charge reserve' if morning or overdue else 'Low hot-water reserve' if low else 'Finishing necessary charge' if finish else 'Scheduled DHW period' if scheduled else 'Charging deferred'
+    start=min(model['tank_max_c']-.5,model.get('dhw_start_c',model['tank_target_c']))
+    # An explicitly planned Economy pause may interrupt a reserve top-up only
+    # while a later Normal command can still start charging. Never strand a
+    # partly warm tank above its native start threshold before the morning goal.
+    economic_pause=bool(allow_pause and not scheduled and charging and not (morning or overdue or low)
+                        and tank>=model['tank_min_c']+2.5 and tank<=start-.3)
+    finish=charging and tank<full and not economic_pause
+    reason='06:00 full-charge reserve' if morning or overdue else 'Low hot-water reserve' if low else 'Finishing necessary charge' if finish else 'Scheduled DHW period' if scheduled else 'Planned pause with restartable hot-water reserve' if economic_pause else 'Charging deferred'
     normal=scheduled or morning or overdue or low or finish
     return {'dhw':'Normal' if normal else 'Economy','dhw_reason':reason,
             'dhw_action':'Charge enabled' if normal else 'Deferred','dhw_deadline':deadline,
-            'dhw_full_c':full,'dhw_morning_override':morning or overdue}
+            'dhw_full_c':full,'dhw_morning_override':morning or overdue,'dhw_economic_pause':economic_pause}
 
 
 def charge(tank, enabled, charging, dt, model, inline=0., draw=None):

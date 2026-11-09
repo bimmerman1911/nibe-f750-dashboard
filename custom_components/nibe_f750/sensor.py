@@ -31,6 +31,9 @@ class ControlSensor(ControllerEntity, SensorEntity):
 
 
 class ForecastSensor(ControllerEntity, SensorEntity):
+    # Quarter-hour predictions already persist in the local accounting store.
+    _unrecorded_attributes = frozenset({'forecast'})
+
     def __init__(self, controller):
         super().__init__(controller, 'forecast', 'NIBE heating forecast')
 

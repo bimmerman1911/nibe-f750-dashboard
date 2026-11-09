@@ -8,12 +8,14 @@ from .engine import C1, REQUIRED, SUPPLY, PRIORITY, fresh, number
 from .adaptive import bounded, filtered_heat
 from .predictive import thermal_step
 from .dhw import policy, charge
+from .native import emitter_estimate
 
 DM='sensor.vp_degree_minutes_2'
 
 class OffsetLearner:
     def __init__(self):
         self.bank={'theta':[.35,.25,.75,0.], 'p':[[1. if i==j else 0. for j in range(4)] for i in range(4)]}
+        self.emitter={}
         self.gain=2.5
         self.start_dm=-60.
         self.aux_dm=-700.
@@ -24,7 +26,7 @@ class OffsetLearner:
         self.revision=0
 
     def dump(self):
-        return {'version':1,'bank':self.bank,'gain':self.gain,'count':self.count,'error':self.error,'start_dm':self.start_dm,'aux_dm':self.aux_dm}
+        return {'version':1,'bank':self.bank,'gain':self.gain,'count':self.count,'error':self.error,'start_dm':self.start_dm,'aux_dm':self.aux_dm,'emitter':self.emitter}
 
     def restore(self,data):
         try:
@@ -36,6 +38,7 @@ class OffsetLearner:
             assert all(p[i][i]>0 for i in range(4)) and math.isfinite(data['error'])
             assert -1500<=data.get('start_dm',-60)<=-1 and -3000<=data.get('aux_dm',-700)<=-1
             self.start_dm=data.get('start_dm',-60);self.aux_dm=data.get('aux_dm',-700)
+            self.emitter=data.get('emitter',{}) if isinstance(data.get('emitter',{}),dict) else {}
             self.bank=data['bank'];self.gain=data['gain'];self.count=data['count'];self.error=data['error']
             return True
         except (KeyError,TypeError,ValueError,AssertionError):
@@ -43,6 +46,11 @@ class OffsetLearner:
 
     def update(self,states,now,capacity):
         sample=inputs(states,now,capacity)
+        if sample is not None and all(fresh(states.get(e),now) and number(states[e].state) is not None for e in ('sensor.ovanvaning_temperature','sensor.nedervaning_temperature')):
+            room=sum(float(states[e].state) for e in ('sensor.ovanvaning_temperature','sensor.nedervaning_temperature'))/2
+            fitted=emitter_estimate({**sample,'time':sample.get('measurement_time',sample['time'])},room,{'compressor_heat_kw':capacity},self.emitter)
+            if fitted!=self.emitter:
+                self.emitter=fitted;self.revision+=1
         prev=self.previous;self.previous=sample
         if sample is None or prev is None or not 0<now-prev['time']<=180:
             self.anchor=None
@@ -88,7 +96,7 @@ class OffsetLearner:
         self.count+=1;self.revision+=1
 
     def parameters(self):
-        return {'theta':self.bank['theta'][:],'offset_gain':self.gain,'start_dm':self.start_dm,'aux_dm':self.aux_dm,'windows':self.count,'error_kw':self.error}
+        return {'theta':self.bank['theta'][:],'offset_gain':self.gain,'emitter':self.emitter.copy(),'start_dm':self.start_dm,'aux_dm':self.aux_dm,'windows':self.count,'error_kw':self.error}
 
 
 def inputs(states,now,capacity):
@@ -103,9 +111,9 @@ def inputs(states,now,capacity):
         return None
     if any('defrost' in states[e].state.lower() for e in ('sensor.vp_status','sensor.vp_status_compressor') if e in states):
         return None
-    return {'time':now,'offset':offset,'required':required,'supply':supply,'dm':dm,
+    return {'time':now,'measurement_time':min(states[e].last_reported.timestamp() for e in (SUPPLY,'sensor.vp_current_compressor_frequency','sensor.vp_max_compressor_frequency')),'offset':offset,'required':required,'supply':supply,'dm':dm,
             'heat':capacity*min(1,hz/maximum)+inline if mode.state=='Heating' else 0.,
-            'outside':outside,'mode':mode.state,'compressor_on':hz>0,'inline':inline}
+            'outside':outside,'mode':mode.state,'compressor_on':hz>0,'fraction':min(1,hz/maximum),'inline':inline}
 
 
 def offset_levels(control):
