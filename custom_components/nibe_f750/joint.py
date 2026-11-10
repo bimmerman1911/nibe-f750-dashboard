@@ -8,6 +8,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import math
 from statistics import median
+from time import monotonic
 from .engine import ROOM1, ROOM2, C1, DHW, fresh, number
 from .offset import inputs, offset_levels
 from .native import response_step, emitter_estimate, attainable_supply
@@ -43,6 +44,38 @@ class State:
 
 def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
          command_not_before=None, budget=None, emitter=None, width=18):
+    """Compare complete price-aware rollouts with the bounded beam search.
+
+    Rollouts retain deliberate coasting paths that a prefix-ranked beam can
+    discard before delayed heat/cost effects become visible. Every candidate
+    uses the same native simulation, reserve policy and objective.
+    """
+    started=monotonic()
+    results=[]
+    for strategy in ('flex', -3., -10., 0.):
+        if budget:
+            budget.check_cancelled()
+            if results and budget.remaining()<3.:break
+        result=_search(slots,states,now,model,response,min_hz,max_hz,
+            command_not_before,budget,emitter,width=4,strategy=strategy)
+        results.append(result)
+    if budget is None or budget.remaining()>=3.:
+        results.append(_search(slots,states,now,model,response,min_hz,max_hz,
+            command_not_before,budget,emitter,width=width))
+    best=min(results,key=lambda r:tuple(r['selection_score']))
+    best['planning']['search_seconds']=round(monotonic()-started,3)
+    best['planning']['total_expanded']=sum(r['planning']['expanded'] for r in results)
+    best['planning']['candidate_schedules']=len(results)
+    best['planning']['selected_strategy']=best['planning']['strategy']
+    best['planning']['candidate_costs']=[{'strategy':r['planning']['strategy'],
+        'cost':r['model_cost'],'violation':r['constraint_violation_score'],
+        'objective':r['selection_score'][1]} for r in results]
+    best['planning']['search_limited']=any(r['planning']['search_limited'] for r in results) or len(results)<5
+    return best
+
+
+def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
+         command_not_before=None, budget=None, emitter=None, width=18, strategy=None):
     m={**DEFAULTS,**(model or {})};response=response or {}
     def numeric(key, low, high):
         try:value=float(m[key])
@@ -171,6 +204,21 @@ def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
                 offsets=[min(levels,key=lambda v:abs(v-wanted))]
                 if reserve['dhw']=='Normal':modes=['Normal']
                 else:modes=['Normal' if cheap and previous.water<=m.get('dhw_start_c',m['tank_target_c']) else 'Economy']
+            if strategy is not None and not holding:
+                # Compare the current price to known later prices, never a
+                # hard-coded clock window. Restore heat ahead of a predicted
+                # comfort shortfall, including heat already in transit.
+                cheap=chunks[0]['price']<=median([s['price'] for s in slots[slot_index:]])
+                target=m['room_target_c'] if cheap else m['room_min_c']+uncertainty+.15
+                delay=max(.5,m.get('heating_lag_hours',1.))
+                load=max(0.,m['heat_loss_kw_per_k']*(previous.room+gap-chunks[0]['outdoor'])-m.get('internal_gain_kw',0.))
+                projected=previous.room+gap+(previous.stored-load)*delay/m['thermal_capacity_kwh_per_k']
+                need=max(0.,min(cap,load+(target-projected)*m['thermal_capacity_kwh_per_k']/delay))
+                desired=previous.room+need/conductance
+                wanted=sample['offset']+(desired-sample['required']+1.2*(chunks[0]['outdoor']-sample['outside']))/gain
+                if not cheap and strategy!='flex' and projected>m['room_min_c']+uncertainty:
+                    wanted=strategy
+                offsets=[min(levels,key=lambda v:abs(v-wanted))]
             for offset in offsets:
                 for mode in modes:
                     expanded+=1
@@ -223,8 +271,8 @@ def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
                                 pending=False
                                 local=datetime.fromtimestamp(moment,zone)
                                 if local.hour>=6:completed_day=local.date().isoformat()
-                            due=next_deadline(moment-h*3600, str(zone))
-                            if moment-h*3600<due<=moment+1e-5:
+                            crossed_deadline=next_deadline(moment-h*3600, str(zone))
+                            if moment-h*3600<crossed_deadline<=moment+1e-5:
                                 short=max(0,m['tank_max_c']-.5-w)
                                 miss+=short;penalty+=300*short*short
                         cost+=energy*chunk['price'];auxiliary_energy+=extra_energy
@@ -247,17 +295,17 @@ def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
         candidates.sort(key=rank)
         diverse={}
         for n in candidates:
-            key=(round(n.room*10),round(n.water*2),round(n.dm/150),round(n.supply/3),round(n.stored),round(n.heat),n.mode)
+            key=(round(n.room*10),round(n.water*2),round(n.dm/150),round(n.supply/3),round(n.stored),round(n.heat),n.mode,n.running,n.charging,n.pending,n.offset)
             diverse.setdefault(key,n)
         pool=list(diverse.values())
-        # Preserve both deferred and enabled water paths plus a warm-storage
-        # frontier: delayed heat cannot be judged from current room cost alone.
+        # Preserve storage and degree-minute frontiers. Running/charging state
+        # and pending commands are not interchangeable physical trajectories.
         selected=[]
         for mode in ('Economy','Normal'):
             group=[n for n in pool if n.mode==mode]
             if group:
                 selected.append(group[0])
-                for frontier in (max(group,key=lambda n:n.room+n.stored*.03),min(group,key=lambda n:n.room+n.stored*.03)):
+                for frontier in (max(group,key=lambda n:n.room+n.stored*.03),min(group,key=lambda n:n.room+n.stored*.03),max(group,key=lambda n:n.dm),min(group,key=lambda n:n.dm)):
                     if all(frontier is not q for q in selected):selected.append(frontier)
         for n in pool:
             if len(selected)>=width:break
@@ -289,7 +337,8 @@ def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
         'model':m,'initial_room':room,'initial_water':water,'horizon_end':end,'model_cost':best.cost,
         'inline_kwh':best.aux,'compressor_only':best.aux<.01,'dhw_auxiliary_uncertain':aux_limit>0,'recovery_plan':recovery,'constraint_violation_score':best.violation,
         'dhw_deadline_shortfall_c':best.shortfall,'emitter':calibration,
-        'planning':{'expanded':expanded,'command_period_seconds':COMMAND_SECONDS,'command_not_before':earliest,
+        'planning':{'strategy':'beam' if strategy is None else 'price-aware '+str(strategy),'expanded':expanded,'command_period_seconds':COMMAND_SECONDS,'command_not_before':earliest,
             'search_limited':limited,'comfort_margin_c':uncertainty,'known_hours':(end-now)/3600,'short_horizon':end-now<21600,
             'native_tank_goal_limited':native_goal_limited,'requested_tank_target_c':requested_tank_target,'terminal_heat_value_sek_per_kwh':heat_price,'heat_basis':'Frequency-based nominal heat; not metered'},
+        'selection_score':[best.violation,best.cost+best.penalty+terminal(best)],
         'offset_response':response}

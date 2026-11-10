@@ -12,6 +12,8 @@ async def async_get_config_entry_diagnostics(hass, entry):
             'planning':controller.forecast.get('planning',{}),
             'emitter_calibration':controller.forecast.get('emitter',{}),
             'command_preview':controller.forecast.get('commands',[])[:8],
+            'forecast_steps':controller.forecast.get('steps',[]),
+            'forecast_commands':controller.forecast.get('commands',[]),
             'morning_completed_date':controller.data.get('dhw_morning_completed_date'),
             'forecast_model':controller.forecast.get('model',{}),
             'forecast_summary':{k:controller.forecast.get(k) for k in

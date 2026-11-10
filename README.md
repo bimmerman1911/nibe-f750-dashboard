@@ -23,6 +23,10 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Peak planning improvement — v0.21.1
+
+The planner now compares complete price-aware coasting/recovery schedules with its beam search. This fixes a case where the search discarded a cheaper, comfortable way through the afternoon price peak before its delayed benefit became visible. Increasing calculation time alone did not recover it. All candidates use the same native-response model, comfort constraints, DHW protections and cloud-write gates. Diagnostics include the full forecast and candidate comparisons. No configuration reset or larger calculation budget is needed.
+
 ## Joint adaptive control — v0.21
 
 The controller now plans **heating offsets and DHW settings together**, simulating the commands it can actually apply. This replaces the earlier ideal heat schedule followed by a separate offset translation.

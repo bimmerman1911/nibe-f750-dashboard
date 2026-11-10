@@ -6,6 +6,14 @@ The earlier implementation chose an ideal heat/DHW schedule and then simulated o
 
 The live predictor now uses one joint command search (`joint.py`). The earlier pure schedulers remain for legacy regressions/demo compatibility; they do not select live commands. The circuit diagram is unchanged.
 
+## Peak-search correction — v0.21.1
+
+A live investigation exposed a cheaper feasible peak-avoidance schedule which the prefix-ranked beam discarded. More calculation time did not recover that trajectory: the search had already pruned it. The predictor now evaluates four complete price-aware rollouts before the beam search, and selects among all completed schedules using the same comfort-first objective. Strategies use known later prices and simulated warmth in transit, not fixed afternoon clock windows. They retain native timing, DHW reserve and 06:00 policy. A strategic rollout is a candidate, never an instruction to coast regardless of comfort.
+
+Beam diversity also distinguishes compressor/charging/pending state and the current offset, and retains both degree-minute frontiers. The morning-deadline lookahead no longer shares a variable overwritten by simulation substeps. Budget accounting covers all candidate searches; at low remaining budget a complete candidate is retained. The existing 12-second soft budget and 30-second outer timeout are unchanged.
+
+Diagnostics now include the full quarter-hour forecast, command timeline, candidate costs/objectives, selected strategy, total expansions and local search runtime. These support future replay without credentials. Snapshot tests are offline counterfactuals: REST snapshots can differ from the exact readings used when the original plan was generated. Model cost reductions are not measured household savings.
+
 ## Commands, dynamics and objective
 
 The search jointly considers every supported primary offset and Normal/Economy choices. Actual current settings are held until the next permitted update. Future command blocks are at least 16 minutes apart, with the same durable live write gate rechecked at application. A C2-only update cannot consume the budget during an explicitly planned hold. Quarter-hour price/power output is duration-weighted across command boundaries; current requested settings come from the command timeline, not the averaged graph point.
