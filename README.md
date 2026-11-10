@@ -23,6 +23,12 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Interactive charts — v0.22.0
+
+Prices & schedule and Outdoor forecast support zoom buttons, earlier/later navigation, horizontal drag and two-finger pinch. Tap or hover to inspect interval values; keyboard arrows inspect points and +/− zoom. Reset restores each chart's full default time window. Ctrl/Command + wheel zooms without intercepting normal scrolling.
+
+Open **Data & labels** to choose visible series and point labels. Price, predicted/observed power, schedule colours and inline highlighting can be selected separately. Display preferences are saved in this browser; zoom/pan and inspection survive live HA updates. These controls only change the visualisation and do not change heat-pump settings. Zooming uses available data; it does not fetch additional history.
+
 ## Peak planning improvement — v0.21.1
 
 The planner now compares complete price-aware coasting/recovery schedules with its beam search. This fixes a case where the search discarded a cheaper, comfortable way through the afternoon price peak before its delayed benefit became visible. Increasing calculation time alone did not recover it. All candidates use the same native-response model, comfort constraints, DHW protections and cloud-write gates. Diagnostics include the full forecast and candidate comparisons. No configuration reset or larger calculation budget is needed.
