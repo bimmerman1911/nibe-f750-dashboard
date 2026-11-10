@@ -119,7 +119,7 @@ class Predictor:
             def evaluate():
                 return joint_plan(slots,states,now,model,response,min_hz,max_hz,
                     command_not_before=self.command_not_before,budget=budget,
-                    emitter=response.get('emitter'))
+                    emitter=response.get('emitter'),incumbent=self.result)
             try:
                 result=await self.hass.async_add_executor_job(evaluate)
             finally:

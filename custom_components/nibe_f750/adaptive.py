@@ -35,6 +35,8 @@ class ThermalLearner:
         self.banks = [{'lag': lag, 'theta': [bounded(h/c,.0005,.15), bounded(1/c,.01,.5), 0.],
                        'p': [[.0002, 0., 0.], [0., .04, 0.], [0., 0., .02]],
                        'score': .1, 'heat': 0.} for lag in LAGS]
+        self.room_response = {"heating_rate":0.,"coasting_rate":0.,"heating_hours":0.,"coasting_hours":0.}
+        self.heat_timestamp = None
         self.count = 0
         self.heating_windows = 0
         self.cooling_windows = 0
@@ -69,6 +71,7 @@ class ThermalLearner:
     def dump(self):
         # Deliberately omit partial windows: never train across a restart/gap.
         return {'version': 1, 'banks': self.banks, 'count': self.count,
+                'room_response':dict(self.room_response),'heat_timestamp':self.heat_timestamp,
                 'heating_windows':self.heating_windows, 'cooling_windows':self.cooling_windows,
                 'last_learning_at':self.last_learning_at,'last_heating_at':self.last_heating_at,
                 'projection_windows':self.projection_windows,'projection_last_window':self.projection_last_window,
@@ -137,6 +140,14 @@ class ThermalLearner:
             self.draw_hours=draw_hours
             self.projection_windows=data.get('projection_windows',0)
             self.projection_last_window=data.get('projection_last_window',False)
+            response=data.get('room_response',{})
+            for k in self.room_response:
+                v=response.get(k,0.)
+                assert isinstance(v,(int,float)) and math.isfinite(v) and (abs(v)<=.3 if k.endswith('rate') else 0<=v<=1e6)
+                self.room_response[k]=v
+            timestamp=data.get('heat_timestamp',data.get('last_learning_at'))
+            assert timestamp is None or (math.isfinite(timestamp) and timestamp>=0)
+            self.heat_timestamp=timestamp
             return True
         except (KeyError, TypeError, ValueError, AssertionError, ZeroDivisionError):
             return False
@@ -180,8 +191,12 @@ class ThermalLearner:
             return False
         if previous is None or not 30 <= now-previous['time'] <= 180:
             self.window = self.charge_window = self.draw_window = None
+            age=(now-self.heat_timestamp)/3600 if self.heat_timestamp is not None else None
             for bank in self.banks:
-                bank['heat'] = current['heat']
+                # Preserve delayed heat across short gaps/restarts without
+                # inventing unobserved input or fitting across missing data.
+                bank['heat'] = bank['heat']*math.exp(-age/bank['lag']) if age is not None and 0<=age<=6 and bank['lag']>0 else current['heat']
+            self.heat_timestamp=now
             self.mode_since = self.run_since = None
             self.comfort_since = current['time']
             return False
@@ -198,7 +213,7 @@ class ThermalLearner:
             self.rejected += 1
             return False
         if self.window is None:
-            self.window = {'start':previous['room'], 'hours':0., 'heat_energy':0.,
+            self.window = {'start':previous['room'], 'rooms':previous['rooms'], 'hours':0., 'heat_energy':0.,
                            'heat_min':previous['heat'],'heat_max':previous['heat'],
                            'features':[[0.,0.,0.] for _ in self.banks]}
         gradient = ((previous['outside']-previous['room'])+(current['outside']-current['room']))/2
@@ -209,6 +224,7 @@ class ThermalLearner:
             x[0] += gradient*dt
             x[1] += average*dt
             x[2] += dt
+        self.heat_timestamp=now
         self.window['hours'] += dt
         self.window['heat_energy'] += heat*dt
         self.window['heat_min']=min(self.window['heat_min'],previous['heat'],current['heat'])
@@ -225,6 +241,16 @@ class ThermalLearner:
             self.projection_windows+=int(projected)
             self.projection_last_window=projected
             average_heat=self.window['heat_energy']/self.window['hours']
+            mode='heating' if average_heat>=.5 else 'coasting' if average_heat<=.1 else None
+            if mode:
+                hours=self.window['hours']
+                initial_gap=(self.window['rooms'][0]-self.window['rooms'][1])/2
+                observed_gap=(current['rooms'][0]-current['rooms'][1])/2
+                rate=bounded((observed_gap-initial_gap)/hours,-.3,.3)
+                key=mode+'_rate';coverage=mode+'_hours'
+                alpha=1. if self.room_response[coverage]==0 else 1-math.exp(-hours/2)
+                self.room_response[key]+=(rate-self.room_response[key])*alpha
+                self.room_response[coverage]+=hours
             self.heating_windows += int(average_heat>=.5)
             self.cooling_windows += int(average_heat<=.1)
             self.last_learning_at=now
@@ -372,7 +398,7 @@ class ThermalLearner:
     def parameters(self):
         bank = self.banks[self.selected]
         (loss,capacity,gain),_=self._bounded_parameters()
-        return {**self.quality(),'heat_loss_kw_per_k':loss, 'thermal_capacity_kwh_per_k':capacity,
+        return {**self.quality(),'room_response':dict(self.room_response),'heat_loss_kw_per_k':loss, 'thermal_capacity_kwh_per_k':capacity,
                 'internal_gain_kw':gain, 'heating_lag_hours':bank['lag'],
                 'initial_heat_kw':bank['heat'], 'dhw_heat_kw':self.dhw_capacity,
                 'dhw_fraction':self.dhw_fraction,'dhw_start_c':self.dhw_start_c,

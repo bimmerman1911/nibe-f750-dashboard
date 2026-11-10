@@ -4,6 +4,7 @@ Heat is a nominal thermal proxy, not a meter reading. Degree minutes remain
 owned by NIBE; simulation never writes degree minutes or compressor frequency.
 """
 import math
+from statistics import median
 from .engine import C1, REQUIRED, SUPPLY, PRIORITY, fresh, number
 from .adaptive import bounded, filtered_heat
 from .predictive import thermal_step
@@ -18,6 +19,8 @@ class OffsetLearner:
         self.emitter={}
         self.gain=2.5
         self.start_dm=-60.
+        self.start_samples=[]
+        self.start_source="Initial prior"
         self.aux_dm=-700.
         self.count=0
         self.error=0.
@@ -26,7 +29,7 @@ class OffsetLearner:
         self.revision=0
 
     def dump(self):
-        return {'version':1,'bank':self.bank,'gain':self.gain,'count':self.count,'error':self.error,'start_dm':self.start_dm,'aux_dm':self.aux_dm,'emitter':self.emitter}
+        return {'version':1,'bank':self.bank,'gain':self.gain,'count':self.count,'error':self.error,'start_dm':self.start_dm,'start_samples':self.start_samples[:],'start_source':self.start_source,'aux_dm':self.aux_dm,'emitter':self.emitter}
 
     def restore(self,data):
         try:
@@ -37,7 +40,14 @@ class OffsetLearner:
             assert all(lo<=v<=hi for v,(lo,hi) in zip(theta,((0,2),(0,2),(0,.98),(-2,2))))
             assert all(p[i][i]>0 for i in range(4)) and math.isfinite(data['error'])
             assert -1500<=data.get('start_dm',-60)<=-1 and -3000<=data.get('aux_dm',-700)<=-1
-            self.start_dm=data.get('start_dm',-60);self.aux_dm=data.get('aux_dm',-700)
+            samples=data.get('start_samples',[])
+            assert isinstance(samples,list) and len(samples)<=9 and all(isinstance(v,(int,float)) and math.isfinite(v) and -1500<=v<-1 for v in samples)
+            self.start_samples=samples[:]
+            self.start_source='Bracketed starts' if samples else 'Initial prior'
+            # Legacy EWMA mixed delayed/mode-switch observations; it is not a
+            # validated native start threshold. Retain the remaining fit.
+            self.start_dm=median(samples) if samples else -60.
+            self.aux_dm=data.get('aux_dm',-700)
             self.emitter=data.get('emitter',{}) if isinstance(data.get('emitter',{}),dict) else {}
             self.bank=data['bank'];self.gain=data['gain'];self.count=data['count'];self.error=data['error']
             return True
@@ -51,13 +61,21 @@ class OffsetLearner:
             fitted=emitter_estimate({**sample,'time':sample.get('measurement_time',sample['time'])},room,{'compressor_heat_kw':capacity},self.emitter)
             if fitted!=self.emitter:
                 self.emitter=fitted;self.revision+=1
+        configured=states.get('number.vp_start_compressor')
+        threshold=number(configured.state) if fresh(configured,now) else None
+        if threshold is not None and -1500<=threshold<-1:
+            self.start_dm=threshold;self.start_source='Native setting'
         prev=self.previous;self.previous=sample
         if sample is None or prev is None or not 0<now-prev['time']<=180:
             self.anchor=None
             return
         if sample['mode']=='Heating' and prev['mode'] in ('Heating','Off'):
-            if sample['compressor_on'] and not prev['compressor_on'] and -1500<=sample['dm']<-1:
-                self.start_dm=.85*self.start_dm+.15*sample['dm'];self.revision+=1
+            if (sample['compressor_on'] and not prev['compressor_on']
+                and -1500<=sample['dm']<prev['dm']<-1 and prev['dm']-sample['dm']<=120
+                and abs(sample['offset']-prev['offset'])<.1
+                and abs(sample['required']-prev['required'])<2 and self.start_source!='Native setting'):
+                self.start_samples=(self.start_samples+[(sample['dm']+prev['dm'])/2])[-9:]
+                self.start_dm=median(self.start_samples);self.start_source='Bracketed starts';self.revision+=1
             if sample['inline']>.1 and prev['inline']<=.1 and -3000<=sample['dm']<-1:
                 self.aux_dm=.85*self.aux_dm+.15*sample['dm'];self.revision+=1
         # Identify curve shift only across isolated offset changes in stable weather.
@@ -96,7 +114,7 @@ class OffsetLearner:
         self.count+=1;self.revision+=1
 
     def parameters(self):
-        return {'theta':self.bank['theta'][:],'offset_gain':self.gain,'emitter':self.emitter.copy(),'start_dm':self.start_dm,'aux_dm':self.aux_dm,'windows':self.count,'error_kw':self.error}
+        return {'theta':self.bank['theta'][:],'offset_gain':self.gain,'emitter':self.emitter.copy(),'start_dm':self.start_dm,'start_samples':self.start_samples[:],'start_source':self.start_source,'aux_dm':self.aux_dm,'windows':self.count,'error_kw':self.error}
 
 
 def inputs(states,now,capacity):

@@ -40,10 +40,11 @@ class State:
     pieces: object=None
     completed_day: str=''
     violation: float=0.
+    room_delta: float=0.
 
 
 def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
-         command_not_before=None, budget=None, emitter=None, width=18):
+         command_not_before=None, budget=None, emitter=None, width=18, incumbent=None):
     """Compare complete price-aware rollouts with the bounded beam search.
 
     Rollouts retain deliberate coasting paths that a prefix-ranked beam can
@@ -52,12 +53,14 @@ def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
     """
     started=monotonic()
     results=[]
-    for strategy in ('flex', -3., -10., 0.):
+    keep=bool(incumbent and 0<=now-incumbent.get('generated_at',0)<=1200 and incumbent.get('commands'))
+    strategies=(['previous'] if keep else [])+['flex', -3., -10., 0.]
+    for strategy in strategies:
         if budget:
             budget.check_cancelled()
             if results and budget.remaining()<3.:break
         result=_search(slots,states,now,model,response,min_hz,max_hz,
-            command_not_before,budget,emitter,width=4,strategy=strategy)
+            command_not_before,budget,emitter,width=4,strategy=strategy,incumbent=incumbent if keep else None)
         results.append(result)
     if budget is None or budget.remaining()>=3.:
         results.append(_search(slots,states,now,model,response,min_hz,max_hz,
@@ -70,12 +73,12 @@ def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
     best['planning']['candidate_costs']=[{'strategy':r['planning']['strategy'],
         'cost':r['model_cost'],'violation':r['constraint_violation_score'],
         'objective':r['selection_score'][1]} for r in results]
-    best['planning']['search_limited']=any(r['planning']['search_limited'] for r in results) or len(results)<5
+    best['planning']['search_limited']=any(r['planning']['search_limited'] for r in results) or len(results)<len(strategies)+1
     return best
 
 
 def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
-         command_not_before=None, budget=None, emitter=None, width=18, strategy=None):
+         command_not_before=None, budget=None, emitter=None, width=18, strategy=None, incumbent=None):
     m={**DEFAULTS,**(model or {})};response=response or {}
     def numeric(key, low, high):
         try:value=float(m[key])
@@ -133,6 +136,11 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
     if not isinstance(gain,(int,float)) or not math.isfinite(gain) or not 0<gain<=10:raise ValueError('Invalid native offset gain')
     uncertainty=min(.25,max(.05,m.get('response_uncertainty_c',.2)*.5),max(0,(m['room_max_c']-m['room_min_c'])/4))
     gap=min(rooms)-room;warm_gap=max(rooms)-room
+    room_response=m.get('room_response',{})
+    rates=[room_response.get(k,0.) for k in ('coasting_rate','heating_rate')]
+    if any(not isinstance(v,(int,float)) or not math.isfinite(v) or abs(v)>.3 for v in rates):raise ValueError('Invalid differential room response')
+    def cold_room(n):
+        return n.room+min(rooms[0]-room+n.room_delta,rooms[1]-room-n.room_delta)
     profile=m.get('dhw_profile',[m['dhw_draw_kw']]*24)
     if len(profile)!=24 or any(not math.isfinite(v) or v<0 for v in profile):raise ValueError('Invalid hourly DHW profile')
     zone=ZoneInfo(m.get('timezone','Europe/Stockholm'))
@@ -198,7 +206,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                 cheap=chunks[0]['price']<=median([s['price'] for s in slots[slot_index:]])
                 preferred=m['room_target_c'] if cheap else m['room_min_c']+uncertainty+.3
                 load=m['heat_loss_kw_per_k']*(preferred-chunks[0]['outdoor'])-m.get('internal_gain_kw',0.)
-                need=max(0.,min(cap,load+(preferred-(previous.room+gap))*m['thermal_capacity_kwh_per_k']/2))
+                need=max(0.,min(cap,load+(preferred-cold_room(previous))*m['thermal_capacity_kwh_per_k']/2))
                 desired_supply=previous.room+need/conductance+1.5
                 wanted=sample['offset']+(desired_supply-sample['required']+1.2*(chunks[0]['outdoor']-sample['outside']))/gain
                 offsets=[min(levels,key=lambda v:abs(v-wanted))]
@@ -209,21 +217,32 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                 # hard-coded clock window. Restore heat ahead of a predicted
                 # comfort shortfall, including heat already in transit.
                 cheap=chunks[0]['price']<=median([s['price'] for s in slots[slot_index:]])
-                target=m['room_target_c'] if cheap else m['room_min_c']+uncertainty+.15
+                future=sorted(s['price'] for s in slots[slot_index:] if s['start']<cursor+8*3600)
+                low,high=future[len(future)//5],future[min(len(future)-1,4*len(future)//5)]
+                value=max(0.,min(1.,(high-chunks[0]['price'])/max(.1,high-low)))
+                floor=min(m['room_target_c'],m['room_min_c']+uncertainty+.15)
+                target=floor+(m['room_target_c']-floor)*value
+                cheap=value>=.5
                 delay=max(.5,m.get('heating_lag_hours',1.))
-                load=max(0.,m['heat_loss_kw_per_k']*(previous.room+gap-chunks[0]['outdoor'])-m.get('internal_gain_kw',0.))
-                projected=previous.room+gap+(previous.stored-load)*delay/m['thermal_capacity_kwh_per_k']
+                load=max(0.,m['heat_loss_kw_per_k']*(cold_room(previous)-chunks[0]['outdoor'])-m.get('internal_gain_kw',0.))
+                projected=cold_room(previous)+(previous.stored-load)*delay/m['thermal_capacity_kwh_per_k']
                 need=max(0.,min(cap,load+(target-projected)*m['thermal_capacity_kwh_per_k']/delay))
                 desired=previous.room+need/conductance
                 wanted=sample['offset']+(desired-sample['required']+1.2*(chunks[0]['outdoor']-sample['outside']))/gain
-                if not cheap and strategy!='flex' and projected>m['room_min_c']+uncertainty:
+                if not cheap and isinstance(strategy,(int,float)) and projected>m['room_min_c']+uncertainty:
                     wanted=strategy
                 offsets=[min(levels,key=lambda v:abs(v-wanted))]
+                if strategy=='previous':
+                    old=next((c for c in incumbent['commands'] if c['start']<=cursor<c['end']),None)
+                    if old and number(old.get('offset')) is not None and old.get('dhw_mode') in ('Economy','Normal'):
+                        offsets=[min(levels,key=lambda v:abs(v-float(old['offset']))) ]
+                        modes=['Normal' if reserve['dhw']=='Normal' else old['dhw_mode']]
             for offset in offsets:
                 for mode in modes:
                     expanded+=1
                     r,w,supply,heat,stored,dm=(getattr(previous,k) for k in ('room','water','supply','heat','stored','dm'))
                     running=previous.running;charging=previous.charging;completed_day=previous.completed_day
+                    room_delta=previous.room_delta
                     pending=reserve['dhw_morning_override'] if not holding else previous.pending
                     cost=previous.cost;penalty=previous.penalty;auxiliary_energy=previous.aux
                     miss=previous.shortfall;pieces=[];violation=previous.violation
@@ -254,7 +273,11 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                             power=max(0,hz*(.0161+.000208*(bt12-45)))
                             energy+=(power+extra+water_aux)*h;extra_energy+=(extra+water_aux)*h
                             water_minutes+=h*60 if dhw else 0
-                            cold=r+gap;warm=r+warm_gap;min_room=min(min_room,cold)
+                            rate=rates[0]+(rates[1]-rates[0])*min(1.,q/.5)
+                            target_delta=2.*rate
+                            room_delta=target_delta+(room_delta-target_delta)*math.exp(-h/2.)
+                            room1=r+rooms[0]-room+room_delta;room2=r+rooms[1]-room-room_delta
+                            cold=min(room1,room2);warm=max(room1,room2);min_room=min(min_room,cold)
                             below=max(0,m['room_min_c']+uncertainty-cold)
                             above=max(0,warm-m['room_max_c']+uncertainty)
                             tank_below=max(0,m['tank_min_c']+1-w)
@@ -279,23 +302,23 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                         pieces.append({**chunk,'offset':offset,'dhw_mode':mode,
                             'dhw_reason':reserve['dhw_reason'] if reserve['dhw']=='Normal' or mode=='Economy' else 'Scheduled DHW period',
                             'action':'dhw' if water_minutes else 'heat' if energy>.02*dt else 'off',
-                            'room':r,'room1':r+rooms[0]-room,'room2':r+rooms[1]-room,'water':w,
+                            'room':r,'room1':room1,'room2':room2,'water':w,
                             'compressor_kw':(energy-extra_energy)/dt,'inline_kw':extra_energy/dt,
                             'hz':hz,'degree_minutes':dm,'required_supply':required,
                             'supply':supply,'coldest_room':min_room})
-                    if not holding and mode=='Normal' and reserve['dhw']=='Economy' and not any(q['action']=='dhw' for q in pieces):
+                    if not holding and strategy!='previous' and mode=='Normal' and reserve['dhw']=='Economy' and not any(q['action']=='dhw' for q in pieces):
                         continue
                     if not holding:
                         penalty+=.015*abs(offset-previous.offset)+(.025 if mode!=previous.mode else 0)
                     command={'economic_pause':bool(mode=='Economy' and reserve.get('dhw_economic_pause')), 'start':cursor,'end':stop,'offset':offset,'dhw_mode':mode,
                              'locked':holding,'action':'dhw' if any(q['action']=='dhw' for q in pieces) else 'heat' if any(q['action']=='heat' for q in pieces) else 'off','reason':(reserve['dhw_reason'] if reserve['dhw']=='Normal' else 'Scheduled DHW period') if mode=='Normal' else 'Price and stored-heat optimisation'}
                     candidates.append(State(r,w,supply,heat,stored,dm,running,charging,pending,offset,mode,
-                        cost,penalty,auxiliary_energy,miss,previous,command,pieces,completed_day=completed_day,violation=violation))
+                        cost,penalty,auxiliary_energy,miss,previous,command,pieces,completed_day=completed_day,violation=violation,room_delta=room_delta))
         rank=lambda n:(n.violation,n.cost+n.penalty+terminal(n)+300*deadline_risk(n)**2)
         candidates.sort(key=rank)
         diverse={}
         for n in candidates:
-            key=(round(n.room*10),round(n.water*2),round(n.dm/150),round(n.supply/3),round(n.stored),round(n.heat),n.mode,n.running,n.charging,n.pending,n.offset)
+            key=(round(n.room*10),round(n.water*2),round(n.dm/150),round(n.supply/3),round(n.stored),round(n.heat),n.mode,n.running,n.charging,n.pending,n.offset,round(n.room_delta*20))
             diverse.setdefault(key,n)
         pool=list(diverse.values())
         # Preserve storage and degree-minute frontiers. Running/charging state

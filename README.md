@@ -23,6 +23,14 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Room response and plan continuity — v0.23.0
+
+The predictor learns how the two measured rooms diverge during heating and coasting, so an accurate indoor average cannot hide faster cooling upstairs. This is a bounded differential correction to the shared house model, not an independently identified two-zone hydraulic model. It learns from valid 30-minute windows; existing learned coefficients remain usable immediately.
+
+Delayed heat estimates now survive short restarts and reading gaps with passive decay instead of being reset to zero. Compressor start learning uses close, stable off-to-heating brackets or the actual native setting when available, excluding DHW transitions and widely spaced starts. Legacy unvalidated start-threshold averages return to the −60 degree-minute prior until a fresh setting/bracket is available; other learned state is retained.
+
+The previous plan is re-simulated as a candidate against current readings, prices and weather. Continuing it competes with changing strategy; it is not blindly held. A continuous price preference replaces the strategic room target's abrupt median-price switch. Comfort, native protections, DHW reserves and cloud-write gates remain authoritative. This improves prediction and decision consistency; it does not promise zero heating in every expensive interval.
+
 ## Interactive charts — v0.22.0
 
 Prices & schedule and Outdoor forecast support zoom buttons, earlier/later navigation, horizontal drag and two-finger pinch. Tap or hover to inspect interval values; keyboard arrows inspect points and +/− zoom. Reset restores each chart's full default time window. Ctrl/Command + wheel zooms without intercepting normal scrolling.
