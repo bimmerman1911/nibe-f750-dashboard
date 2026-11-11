@@ -36,7 +36,8 @@ def response_step(heat, supply_error, degree_minutes, hours, theta, capacity):
 def emitter_estimate(sample, room, model, previous=None):
     """Calibrate effective emitter conductance from available heating readings.
 
-    A near-capacity heating observation provides q/(Tsupply-Troom), using the
+    A near-capacity or separately qualified stable heating observation provides
+    q/(Tsupply-Troom), using the
     same nominal-heat basis as the house model. This anchors attainable supply
     to observed operation instead of assuming the requested temperature can be
     reached. A lone snapshot is explicitly provisional: water warming and heat
@@ -56,7 +57,7 @@ def emitter_estimate(sample, room, model, previous=None):
     delta=supply-room if _finite(supply) else None
     fraction=sample.get('fraction')
     near_capacity=(_finite(fraction) and fraction>=.9) if fraction is not None else (_finite(heat) and heat>=capacity*.9)
-    usable=(sample.get('mode')=='Heating' and near_capacity and _finite(heat) and .2<=heat<=30
+    usable=(sample.get('mode')=='Heating' and (near_capacity or sample.get('steady') is True) and _finite(heat) and .2<=heat<=30
             and delta is not None and delta>=5 and 15<=supply<=80)
     if usable:
         measured=min(2.,max(.04,heat/delta))
@@ -67,9 +68,13 @@ def emitter_estimate(sample, room, model, previous=None):
             return dict(prior)
         raw_count=prior.get('observations',0)
         count=raw_count if valid_old and isinstance(raw_count,int) and not isinstance(raw_count,bool) and raw_count>=0 else 0
-        fitted=.85*old+.15*measured if valid_old and count>0 else measured
+        steady=sample.get('steady') is True
+        raw_steady=prior.get('steady_observations',0)
+        steady_count=raw_steady if type(raw_steady) is int and raw_steady>=0 else 0
+        fitted=.85*old+.15*measured if valid_old and count>0 and not (steady and not steady_count) else measured
         return {'conductance_kw_per_k':fitted,'observations':count+1,
-                'source':'Observed heating proxy','confidence':'Provisional' if count<3 else 'Observed',
+                'steady_observations':steady_count+int(steady),
+                'source':'Observed stable heating proxy' if steady else 'Observed heating proxy','confidence':'Provisional' if (steady and steady_count<2) or count<3 else 'Observed',
                 'reference_supply_c':supply,'reference_heat_kw':heat,'time':timestamp}
     if valid_old:
         return dict(prior)

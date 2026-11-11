@@ -35,7 +35,7 @@ class PeakTests(unittest.TestCase):
         self.assertLessEqual(max(s['room2'] for s in result['steps']),21.)
         candidates=result['planning']['candidate_costs']
         self.assertGreaterEqual(result['planning']['candidate_schedules'],5)
-        self.assertEqual(tuple(result['selection_score']),min((c['violation'],c['objective']) for c in candidates))
+        self.assertEqual((result['constraint_violation_score'],result['morning_shortfall'],result['comfort_risk'],result['selection_score'][1]),min((c['violation'],c['morning_shortfall'],c['comfort_risk'],c['objective']) for c in candidates))
 
     def test_surviving_strategies_observe_a_future_native_write_gate(self):
         slots,states,model,response,emitter=scenario()

@@ -6,6 +6,16 @@ The earlier implementation chose an ideal heat/DHW schedule and then simulated o
 
 The live predictor now uses one joint command search (`joint.py`). The earlier pure schedulers remain for legacy regressions/demo compatibility; they do not select live commands. The circuit diagram is unchanged.
 
+## Economic selection correction — v0.25
+
+Earlier objectives mixed electricity cost with large arbitrary penalties on preference/margin deviation and valued a 20°C endpoint. A tested waiting alternative could meet configured limits yet lose that comparison. Selection is now ordered by actual configured-limit excursions, morning full-charge shortfall, explicit uncertainty-band excursions (with a 0.02°C numerical tolerance), electricity plus necessary endpoint reserve, auxiliary energy and finally diagnostic preference/movement penalties. Rank components are reported separately. When every candidate violates protection, the least-violating recovery path is retained; prediction feasibility is not a physical guarantee.
+
+Terminal room reserve is valued to the minimum plus the bounded uncertainty margin, using the colder modelled room and crediting heat still in transit. DHW terminal reserve is valued to minimum plus the existing 2°C buffer. Neither endpoint is a mandatory 20°C/full-water equality. Remaining reserve is an economic approximation using known tail prices and estimated COP, not invented future prices. In-band preference penalties cannot override lower economic cost among equally protected candidates.
+
+Before the broad beam search, up to four complete local coasting variants remove an initial 30/60/120-minute burst or coast to the first later cheaper window while retaining all later commands. Native minimum offset does not force the compressor off; all variants use the same simulation, command holds, morning policy and budget. Infeasible postponement is rejected when a feasible alternative exists.
+
+Part-load calibration addresses a separate observed actuator-model mismatch: simulated power could remain high even when the real pump maintained its flow target at low frequency. Offset learning now qualifies uninterrupted 15-minute windows: supply span ≤1.5°C, requested supply span ≤0.5°C, offset span ≤0.1, frequency fraction span ≤0.08 and indoor-average span ≤0.3°C. Duplicate cloud observations do not extend coverage; DHW, missing data and gaps over three minutes reset the window. The first stable observation anchors the effective q/(supply−room) proxy; later observations smooth it. Flow/heat remain provisional estimates, not meter readings. High-frequency calibration remains available.
+
 ## Complete-horizon alternatives — v0.24
 
 The eight-hour restriction on strategic price comparison is removed. Its price preference uses all remaining known price/weather intervals, up to the 24-hour horizon. The cost objective already scored the complete horizon, but could not choose a useful deferred schedule if the prefix search and templates never generated it.

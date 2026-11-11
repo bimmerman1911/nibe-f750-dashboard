@@ -17,6 +17,7 @@ class OffsetLearner:
     def __init__(self):
         self.bank={'theta':[.35,.25,.75,0.], 'p':[[1. if i==j else 0. for j in range(4)] for i in range(4)]}
         self.emitter={}
+        self.steady=[]
         self.gain=2.5
         self.start_dm=-60.
         self.start_samples=[]
@@ -58,9 +59,11 @@ class OffsetLearner:
         sample=inputs(states,now,capacity)
         if sample is not None and all(fresh(states.get(e),now) and number(states[e].state) is not None for e in ('sensor.ovanvaning_temperature','sensor.nedervaning_temperature')):
             room=sum(float(states[e].state) for e in ('sensor.ovanvaning_temperature','sensor.nedervaning_temperature'))/2
+            self._steady_sample(sample,room,capacity)
             fitted=emitter_estimate({**sample,'time':sample.get('measurement_time',sample['time'])},room,{'compressor_heat_kw':capacity},self.emitter)
             if fitted!=self.emitter:
                 self.emitter=fitted;self.revision+=1
+        else:self.steady=[]
         configured=states.get('number.vp_start_compressor')
         threshold=number(configured.state) if fresh(configured,now) else None
         if threshold is not None and -1500<=threshold<-1:
@@ -112,6 +115,30 @@ class OffsetLearner:
             theta[i]=bounded(theta[i]+px[i]/denominator*bounded(error,-1,1),lo,hi)
         self.bank['p']=[[(p[i][j]-px[i]*px[j]/denominator)/.999 for j in range(4)] for i in range(4)]
         self.count+=1;self.revision+=1
+
+    def _steady_sample(self, sample, room, capacity):
+        """Anchor attainable flow at steady part-load observations too.
+
+        The high-frequency calibration alone overpredicted the power needed
+        to maintain an already-achieved native flow temperature. No flow meter
+        or new cloud query is required; this remains a frequency-heat proxy.
+        """
+        if sample['mode']!='Heating' or sample['heat']<.5:
+            self.steady=[];return
+        if self.steady and (sample['measurement_time']==self.steady[-1]['measurement_time']):return
+        if self.steady and not 0<sample['time']-self.steady[-1]['time']<=180:self.steady=[]
+        self.steady.append({**sample,'room':room})
+        if self.steady[-1]['time']-self.steady[0]['time']<900:return
+        rows=self.steady;self.steady=[rows[-1]]
+        stable=all(max(r[k] for r in rows)-min(r[k] for r in rows)<=limit for k,limit in
+                   (('offset',.1),('required',.5),('supply',1.5),('fraction',.08),('room',.3)))
+        if not stable:return
+        duration=rows[-1]['time']-rows[0]['time']
+        average=lambda key:sum((a[key]+b[key])/2*(b['time']-a['time']) for a,b in zip(rows,rows[1:]))/duration
+        averaged={**rows[-1],'heat':average('heat'),'supply':average('supply'),
+                  'time':rows[-1]['measurement_time'],'steady':True}
+        self.emitter=emitter_estimate(averaged,average('room'),{'compressor_heat_kw':capacity},self.emitter)
+        self.revision+=1
 
     def parameters(self):
         return {'theta':self.bank['theta'][:],'offset_gain':self.gain,'emitter':self.emitter.copy(),'start_dm':self.start_dm,'start_samples':self.start_samples[:],'start_source':self.start_source,'aux_dm':self.aux_dm,'windows':self.count,'error_kw':self.error}

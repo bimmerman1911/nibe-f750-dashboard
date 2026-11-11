@@ -23,6 +23,16 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Cost-first feasible planning — v0.25.0
+
+Earlier scoring could choose a higher electricity bill because weighted temperature preferences and an endpoint target of 20°C outweighed cost. The planner now protects configured limits, the morning DHW goal and its explicit temperature uncertainty margin first, then compares electricity cost plus necessary endpoint reserve. Preferred temperature, movement and diagnostic penalties are tie-breakers; they cannot buy extra expensive heating inside the protected band. Endpoint valuation no longer assumes the house must finish at 20°C or DHW at its preferred full target.
+
+The search also tests removing the next 30/60/120 minutes of heating while retaining the rest of a complete candidate plan. This catches local timing improvements that all-day deferral templates miss. These tests run before the broad beam search and share its existing computation budget. Native write timing and DHW safety remain unchanged.
+
+Effective flow/heat calibration can now use qualified stable part-load space heating, instead of only near-maximum-frequency observations. It requires at least 15 minutes of uninterrupted fresh measurements with stable flow, frequency, room temperature and requested setting. DHW, gaps and changing settings reset/exclude those windows. This remains a frequency-based proxy; it does not establish metered output or guaranteed savings. It learns automatically without a model reset.
+
+Update in Marketplace, restart Home Assistant and refresh the dashboard. Configured bounds, learned state, write reservations and chart features are preserved. Diagnostics expose comfort-risk and morning-shortfall scores separately from economic cost and tie-break penalties.
+
 ## Proportional schedule colouring — v0.24.1
 
 Price bars now show heating/DHW/inline activity only for the corresponding simulated part of each interval. A 16-minute DHW charge spanning three quarters no longer colours three full bars: a 45-second fragment covers 5% of its bar, the full quarter is filled, and a final 15 seconds covers 1.7%. Tiny fragments are not enlarged to a minimum colour width. Tap/hover inspection reports the modelled activity durations; zooming preserves their positions.
