@@ -294,7 +294,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                     for chunk in chunks:
                         dt=(chunk['end']-chunk['start'])/3600
                         n=max(1,math.ceil(dt*12));h=dt/n
-                        energy=extra_energy=0.;water_minutes=0.;min_room=r
+                        energy=extra_energy=0.;water_minutes=0.;min_room=r;activity=[]
                         required=max(15.,min(60.,sample['required']+gain*(offset-sample['offset'])
                                             -1.2*(chunk['outdoor']-sample['outside'])))
                         for k in range(n):
@@ -318,6 +318,14 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                             power=max(0,hz*(.0161+.000208*(bt12-45)))
                             energy+=(power+extra+water_aux)*h;extra_energy+=(extra+water_aux)*h
                             water_minutes+=h*60 if dhw else 0
+                            activity_start=chunk['start']+k*h*3600
+                            activity_end=chunk['start']+(k+1)*h*3600
+                            activity_mode='dhw' if dhw else 'heat' if power+extra>.02 else 'off'
+                            inline=extra+water_aux
+                            if activity and activity[-1][2]==activity_mode and bool(activity[-1][3])==bool(inline):
+                                a,b,mode_old,kw=activity[-1]
+                                activity[-1]=(a,activity_end,mode_old,(kw*(b-a)+inline*(activity_end-activity_start))/(activity_end-a))
+                            else:activity.append((activity_start,activity_end,activity_mode,inline))
                             rate=rates[0]+(rates[1]-rates[0])*min(1.,q/.5)
                             target_delta=2.*rate
                             room_delta=target_delta+(room_delta-target_delta)*math.exp(-h/2.)
@@ -344,7 +352,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                                 short=max(0,m['tank_max_c']-.5-w)
                                 miss+=short;penalty+=300*short*short
                         cost+=energy*chunk['price'];auxiliary_energy+=extra_energy
-                        pieces.append({**chunk,'offset':offset,'dhw_mode':mode,
+                        pieces.append({**chunk,'activity':activity,'offset':offset,'dhw_mode':mode,
                             'dhw_reason':reserve['dhw_reason'] if reserve['dhw']=='Normal' or mode=='Economy' else 'Scheduled DHW period',
                             'action':'dhw' if water_minutes else 'heat' if energy>.02*dt else 'off',
                             'room':r,'room1':room1,'room2':room2,'water':w,
@@ -396,6 +404,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
         output.append({**s,**{k:last[k] for k in ('offset','dhw_mode','dhw_reason','room','room1','room2','water','hz','degree_minutes','required_supply','supply')},
             'compressor_kw':sum(q['compressor_kw']*(q['end']-q['start']) for q in matches)/duration,
             'inline_kw':sum(q['inline_kw']*(q['end']-q['start']) for q in matches)/duration,
+            'activity':[{'start':a,'end':b,'action':mode,'inline_kw':kw} for q in matches for a,b,mode,kw in q['activity']],
             'action':'dhw' if any(q['action']=='dhw' for q in matches) else 'heat' if any(q['action']=='heat' for q in matches) else 'off'})
     recovery=any(min(s['room1'],s['room2'])<m['room_min_c'] or max(s['room1'],s['room2'])>m['room_max_c'] or s['water']<m['tank_min_c'] for s in output)
     current=next((c for c in commands if c['start']<=max(now,earliest)<c['end']),commands[0])

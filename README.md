@@ -23,6 +23,12 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Proportional schedule colouring — v0.24.1
+
+Price bars now show heating/DHW/inline activity only for the corresponding simulated part of each interval. A 16-minute DHW charge spanning three quarters no longer colours three full bars: a 45-second fragment covers 5% of its bar, the full quarter is filled, and a final 15 seconds covers 1.7%. Tiny fragments are not enlarged to a minimum colour width. Tap/hover inspection reports the modelled activity durations; zooming preserves their positions.
+
+New forecast activity timing is retained with as-issued power history. Older records without precise timing retain coarse quarter-hour colouring, labelled “Quarter-hour estimate” in their tooltips. Times describe predicted production at the model's internal resolution, not measured future operation or merely permission to charge. Control cadence, 16-minute command blocks, write limits and quarter-hour power/cost values are unchanged. Update in Marketplace, restart HA and refresh the dashboard.
+
 ## Full known-price horizon — v0.24.0
 
 Price-aware room preferences now consider every available forecast interval, up to 24 hours. The eight-hour cutoff is removed. The search also constructs explicit alternatives that defer space heating until a later cheaper window, plus alternatives that supply only a comfort bridge before that window. Both an early meaningful price drop and the cheapest later two-hour window are considered, including opportunities beyond twelve hours.

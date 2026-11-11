@@ -167,7 +167,7 @@ try {
     window.jointControl={mode:'Adaptive',reason:'Using stored warmth during expensive prices',target_c:20,room_min_c:18,room_max_c:20.5,offset_c1:4,command_not_before:now+600,dhw:'Normal'};
     window.smartHass.states['switch.nibe_smart_control'].attributes.control=window.jointControl;
     window.smartHass.states['select.vp_comfort_mode']={state:'Normal',attributes:{}};
-    Object.assign(window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast,{generated_at:now,planner:'joint',model:{room_min_c:18,room_target_c:20,room_max_c:20.5},steps:[{start:now,end:now+900,compressor_kw:1,inline_kw:0,price:1,outdoor:5,action:'heat',dhw_mode:'Normal',offset:4,room:20,water:49},{start:now+70*900-43200,end:now+71*900-43200,compressor_kw:1,inline_kw:2,price:1,outdoor:5,action:'dhw',dhw_mode:'Normal',room:20,water:49}]});
+    Object.assign(window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast,{generated_at:now,horizon_end:now+86400,planner:'joint',model:{room_min_c:18,room_target_c:20,room_max_c:20.5},steps:[{start:now,end:now+900,compressor_kw:1,inline_kw:0,price:1,outdoor:5,action:'heat',dhw_mode:'Normal',offset:4,room:20,water:49},{start:now+70*900-43200,end:now+71*900-43200,compressor_kw:1,inline_kw:2,price:1,outdoor:5,action:'dhw',dhw_mode:'Normal',room:20,water:49}]});
     const c=document.querySelector('nibe-f750-smart-card');c._error='';c.hass=window.smartHass;
   });
   assert.equal(await card.locator('.weekly-costs tbody tr').count(),7);
@@ -209,6 +209,33 @@ try {
     window.smartHass.states['switch.nibe_smart_control'].state='on';
     document.querySelector('nibe-f750-smart-card').hass=window.smartHass;
   });
+  // A sixteen-minute charge spanning three quarters must not fill all bars.
+  await page.evaluate(()=>{
+    const now=Date.now()/1000,t=now+3600,from=t+855,to=t+1815;
+    window.activityStart=t*1000;
+    const activity=[{start:t,end:from,action:'off',inline_kw:0},{start:from,end:to,action:'dhw',inline_kw:0},{start:to,end:t+2700,action:'off',inline_kw:0}];
+    const steps=Array.from({length:3},(_,i)=>({start:t+i*900,end:t+(i+1)*900,price:1,compressor_kw:.1,inline_kw:0,outdoor:5,room:20,water:49,action:'dhw',activity:activity.map(a=>({...a}))}));
+    // Keep a current interval so this is a valid active forecast.
+    steps.unshift({start:now,end:now+900,price:1,compressor_kw:0,inline_kw:0,outdoor:5,room:20,water:49,action:'off',activity:[{start:now,end:now+900,action:'off',inline_kw:0}]});
+    const f=window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast;f.steps=steps;f.generated_at=now+1;
+    document.querySelector('nibe-f750-smart-card').hass=window.smartHass;
+  });
+  const ratios=await card.evaluate(c=>{
+    return [...c.shadowRoot.querySelectorAll('[data-activity="dhw"]')].map(el=>{
+      const base=c.shadowRoot.querySelector(`rect[data-start="${el.dataset.start}"]:not([data-activity])`);
+      return Number(el.getAttribute('width'))/Number(base.getAttribute('width'));
+    });
+  });
+  assert.equal(ratios.length,3);
+  assert.ok(Math.abs(ratios[0]-.05)<1e-6);
+  assert.ok(Math.abs(ratios[1]-1)<1e-6);
+  assert.ok(Math.abs(ratios[2]-1/60)<1e-6);
+  assert.deepEqual(await card.locator('[data-activity="dhw"]').evaluateAll(nodes=>nodes.map(n=>Math.round(Number(n.dataset.activitySeconds)))),[45,900,15]);
+  await card.evaluate(c=>c.inspectChart('price',window.activityStart+1000));
+  assert.match(await card.locator('[data-chart="price"] .chart-inspector').textContent(),/DHW 45 s/);
+  await page.evaluate(()=>{window.smartHass.states['switch.nibe_smart_control'].state='off';document.querySelector('nibe-f750-smart-card').hass=window.smartHass;});
+  assert.equal(await card.locator('[data-activity="dhw"]').count(),0);
+  await page.evaluate(()=>{window.smartHass.states['switch.nibe_smart_control'].state='on';document.querySelector('nibe-f750-smart-card').hass=window.smartHass;});
   await page.screenshot({path:'docs/electricity-mobile.png',fullPage:true});
   await page.setViewportSize({width:1280,height:1200});
   await page.screenshot({path:'docs/electricity-desktop.png',fullPage:true});

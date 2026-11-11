@@ -373,6 +373,21 @@ window.customCards.push({type:'nibe-f750-card',name:'NIBE F750 Dashboard',descri
 const finite=v=>typeof v==='number'?Number.isFinite(v):typeof v==='string'&&v.trim()!==''&&Number.isFinite(Number(v));
 const stamp=v=>typeof v==='string'&&/(Z|[+-]\d{2}:\d{2})$/.test(v)?Date.parse(v):NaN;
 const escapeHTML=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Forecasts carry actual simulated activity, rather than Normal permission.
+function chartActivity(rows,start,end) {
+  if(!Array.isArray(rows))return null; // Legacy quarter-hour forecast.
+  const time=v=>Number.isFinite(v)?v<1e12?v*1000:v:NaN;
+  const result=[];
+  for(const row of rows){
+    const a=Math.max(start,time(row.start)),b=Math.min(end,time(row.end));
+    if(!Number.isFinite(a)||!Number.isFinite(b)||b<=a||!['dhw','heat','off'].includes(row.action))continue;
+    result.push({start:a,end:b,action:row.action,inline_kw:Number.isFinite(row.inline_kw)&&row.inline_kw>0?row.inline_kw:0});
+  }
+  result.sort((a,b)=>a.start-b.start);
+  const valid=[];
+  for(const r of result){const end=valid.at(-1)?.end??start;if(r.start<end-1)continue;r.start=Math.max(r.start,end);if(r.end>r.start)valid.push(r);}
+  return valid;
+}
 function normalizePrices(rows,{unit,currency='SEK',vat_percent=0,extra_per_kwh=0}={}) {
   if(!Array.isArray(rows)) throw Error('Timestamped Nord Pool prices are missing.');
   const u=String(unit||'').replace(/\s/g,'').toLowerCase(),curr=currency.toLowerCase();
@@ -640,7 +655,12 @@ if(globalThis.customElements&&!customElements.get('nibe-f750-smart-card')) {
         if(c.predicted!==false&&Number.isFinite(row.predicted_kw))values.push(`Predicted ${round(row.predicted_kw,2)} kW`);
         if(c.actual!==false&&row.start<Date.now()&&Number.isFinite(row.actual_kw))values.push(`Observed estimate ${round(row.actual_kw,2)} kW`);
         if(c.inline!==false&&Number.isFinite(row.inline_kw))values.push(`Inline estimate ${round(row.inline_kw,2)} kW`);
-        if(c.schedule!==false&&row.action)values.push(row.end>Date.now()&&!this.planIsActive(Object.values(this._hass?.states||{}).find(s=>s.attributes?.forecast)?.attributes.forecast)?'Schedule inactive':row.action==='off'?'Coast':row.action==='dhw'?'DHW':'Heating');
+        if(c.schedule!==false&&row.action){
+          const activity=chartActivity(row.activity,row.start,row.end);
+          if(row.end>Date.now()&&!this.planIsActive(Object.values(this._hass?.states||{}).find(s=>s.attributes?.forecast)?.attributes.forecast))values.push('Schedule inactive');
+          else if(activity){for(const mode of ['dhw','heat','off']){const seconds=activity.filter(s=>s.action===mode).reduce((n,s)=>n+(s.end-s.start)/1000,0);if(seconds>0)values.push(`${mode==='dhw'?'DHW':mode==='heat'?'Heating':'Coast'} ${seconds<60?round(seconds,1)+' s':round(seconds/60,1)+' min'}`);}}
+          else values.push(row.action==='off'?'Coast':row.action==='dhw'?'DHW':'Heating');
+        }
       } else if(c.temperature!==false)values.push(`${round(row.outdoor,2)} °C`);
       root.querySelector('.chart-inspector').textContent=`${clock(row.start,d.tz)}–${clock(row.end,d.tz)} · ${values.join(' · ')||'No selected data available'}`;
       const line=root.querySelector('[data-crosshair]'),x=d.left+(Math.max(d.start,row.start)-d.start)/(d.end-d.start)*(d.width-d.left-d.right);
@@ -705,13 +725,21 @@ if(globalThis.customElements&&!customElements.get('nibe-f750-smart-card')) {
       const scheduleActive=this.planIsActive(forecast);
       const rows=new Map((data?.history||[]).map(r=>[r.start*1000,{...r,start:r.start*1000,end:r.end*1000}]));
       const planned=(this.config.demo?this._plan?.steps:scheduleActive?forecast?.steps:[])||[];
-      for(const s of planned){if(!['start','end','compressor_kw','inline_kw','price'].every(k=>Number.isFinite(s[k])))continue;const time=s.start<1e12?s.start*1000:s.start,t=Math.floor(time/quarter)*quarter;if(t<start-quarter||t>end)continue;const old=rows.get(t)||{start:t,end:t+quarter};if(t>=now||old.predicted_kw==null){Object.assign(old,{predicted_kw:s.compressor_kw+s.inline_kw,inline_kw:s.inline_kw,price:s.price,action:s.action});}rows.set(t,old);}
+      for(const s of planned){if(!['start','end','compressor_kw','inline_kw','price'].every(k=>Number.isFinite(s[k])))continue;const time=s.start<1e12?s.start*1000:s.start,t=Math.floor(time/quarter)*quarter;if(t<start-quarter||t>end)continue;const old=rows.get(t)||{start:t,end:t+quarter};if(t>=now||old.predicted_kw==null){Object.assign(old,{predicted_kw:s.compressor_kw+s.inline_kw,inline_kw:s.inline_kw,price:s.price,action:s.action,activity:s.activity});}rows.set(t,old);}
       for(const p of this._market?.prices||[]){for(let t=Math.floor(Math.max(p.start,start)/quarter)*quarter;t<Math.min(p.end,end);t+=quarter){if(t<p.start)continue;const row=rows.get(t)||{start:t,end:t+quarter};row.price=p.price;rows.set(t,row);}}
       const points=[];for(let t=Math.floor(start/quarter)*quarter;t<end;t+=quarter)points.push(rows.get(t)||{start:t,end:t+quarter});
       const width=Math.max(320,Math.min(760,(this._width||this.clientWidth)-80)),height=220,left=38,right=38,top=24,bottom=32;
       const pv=this.chartState('price').price===false?[]:points.map(r=>r.price).filter(Number.isFinite),lo=Math.min(0,...pv),hi=Math.max(1,...pv),powerMax=Math.max(1,...points.flatMap(r=>[this.chartState('price').predicted===false?null:r.predicted_kw,this.chartState('price').actual===false?null:r.actual_kw]).filter(Number.isFinite));
       const x=t=>left+(t-start)/(end-start)*(width-left-right),y=v=>height-bottom-(v-lo)/(hi-lo)*(height-top-bottom),yp=v=>height-bottom-v/powerMax*(height-top-bottom),tz=data?.timezone||this._hass?.config?.time_zone||'Europe/Stockholm';
-      const bars=points.filter(r=>r.end>start&&r.start<end&&Number.isFinite(r.price)).map(r=>`<rect data-schedule="${r.end>now&&!scheduleActive?'inactive':'forecast'}" data-start="${r.start}" ${r.inline_kw>0?`data-inline-kw="${r.inline_kw}"`:``} x="${x(Math.max(start,r.start))}" y="${Math.min(y(0),y(r.price))}" width="${Math.max(.5,x(Math.min(end,r.end))-x(Math.max(start,r.start))-1)}" height="${Math.max(1,Math.abs(y(r.price)-y(0)))}" fill="${r.end>now&&!scheduleActive?'#e1e9ed':r.inline_kw>0&&this.chartState('price').inline!==false?'#d59a58':this.chartState('price').schedule===false?'#e1e9ed':r.action==='heat'?'#a3c7b7':r.action==='dhw'?'#b0c7df':'#e1e9ed'}"><title>${clock(r.start,tz)} · ${round(r.price,3)} SEK/kWh${r.inline_kw>0?` · Inline estimate ${round(r.inline_kw,2)} kW`:''}</title></rect>`).join('');
+      const state=this.chartState('price');
+      const bars=points.filter(r=>r.end>start&&r.start<end&&Number.isFinite(r.price)).map(r=>{
+        const inactive=r.end>now&&!scheduleActive,a=Math.max(start,r.start),b=Math.min(end,r.end);
+        const left=x(a),barWidth=Math.max(.5,x(b)-left-1),segments=chartActivity(r.activity,a,b);
+        const colour=(action,inline)=>inactive?'#e1e9ed':inline>0&&state.inline!==false?'#d59a58':state.schedule===false?'#e1e9ed':action==='heat'?'#a3c7b7':action==='dhw'?'#b0c7df':'#e1e9ed';
+        const rect=(from,to,action,inline,precise)=>`<rect data-schedule="${inactive?'inactive':'forecast'}" data-start="${r.start}" ${precise?`data-activity="${action}" data-activity-seconds="${(to-from)/1000}"`:''} ${inline>0?`data-inline-kw="${inline}"`:''} x="${left+(from-a)/(b-a)*barWidth}" y="${Math.min(y(0),y(r.price))}" width="${(to-from)/(b-a)*barWidth}" height="${Math.max(1,Math.abs(y(r.price)-y(0)))}" fill="${colour(action,inline)}"><title>${clock(from,tz)} · ${round(r.price,3)} SEK/kWh${precise?` · ${action==='dhw'?'DHW':action==='heat'?'Heating':'Coast'} ${round((to-from)/60e3,2)} min`:' · Quarter-hour estimate'}${inline>0?` · Inline estimate ${round(inline,2)} kW`:''}</title></rect>`;
+        if(segments===null)return rect(a,b,r.action,r.inline_kw,false);
+        return rect(a,b,'off',0,false)+(inactive?'':segments.filter(s=>s.action!=='off'||s.inline_kw>0).map(s=>rect(s.start,s.end,s.action,s.inline_kw,true)).join(''));
+      }).join('');
       const path=(key,actual)=>{let d='',open=false;for(const r of points){const t=actual?Math.min(now,r.start+quarter/2):r.start+quarter/2,v=r[key];if(!Number.isFinite(v)||(actual&&r.start>=now)||t<start||t>end){open=false;continue;}d+=`${open?'L':'M'}${x(t)} ${yp(v)} `;open=true;}return d;};
       return this.chartShell('price',`<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Electricity prices and power"><text x="0" y="12">SEK/kWh</text><text x="${width}" y="12" text-anchor="end">kW</text>${bars}<path data-series="predicted" d="${path('predicted_kw',false)}" stroke="${scheduleActive?'#527eb5':'#8799a4'}" ${scheduleActive?'':'stroke-dasharray="4 4"'} stroke-width="2.4" fill="none"/><path data-series="actual" d="${path('actual_kw',true)}" stroke="#b6673b" stroke-width="2.4" fill="none"/><line x1="${x(now)}" x2="${x(now)}" y1="${top}" y2="${height-bottom}" stroke="#647b89" stroke-dasharray="3 4"/><text x="${x(now)+4}" y="${top+10}">Now</text><text x="0" y="${top+8}">${round(hi,2)}</text><text x="0" y="${height-bottom}">${round(lo,2)}</text><text x="${width}" y="${top+8}" text-anchor="end">${round(powerMax,1)}</text>${Array.from({length:5},(_,i)=>start+(end-start)*i/4).map(t=>`<text x="${x(t)}" y="${height-5}" text-anchor="${t===start?'start':t===end?'end':'middle'}">${clock(t,tz)}</text>`).join('')}</svg>${!scheduleActive?'<p data-plan-inactive>Future schedule inactive · archived predictions are shown for comparison.</p>':''}`,{points,start,end,width,left,right,top,bottom,height,tz,labelY:r=>this.chartState('price').price!==false?y(r.price):yp(this.chartState('price').predicted!==false?r.predicted_kw:r.actual_kw)});
     }
