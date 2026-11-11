@@ -18,6 +18,7 @@ class Predictor:
         self.adaptive_model={}
         self.learning={}
         self.offset_response={}
+        self.air_limit=None
         self.command_not_before=0.
         self.result={'status':'Waiting for forecast','message':'Loading prices and hourly weather.', 'steps':[]}
 
@@ -113,6 +114,13 @@ class Predictor:
             bt12=states.get('sensor.vp_condenser_bt12')
             if bt12 and fresh(bt12,now) and number(bt12.state) is not None:
                 model['dhw_supply_c' if model['initial_mode']=='dhw' else 'supply_c']=float(bt12.state)
+            # Keep the thermal proxy on its reported-frequency basis. Reducing
+            # attainable speed must not pretend full nominal heat is available.
+            model['frequency_reference_hz']=max_hz
+            if self.air_limit is not None:
+                model['air_limit']=self.air_limit.estimate(states,now,max_hz,min_hz)
+                max_hz=model['air_limit']['effective_max_hz']
+                if max_hz<min_hz:raise ValueError('Estimated evaporator capacity is below the native minimum speed')
             # Pure model evaluation stays off HA's event loop.
             budget=PlanningBudget()
             response=dict(self.offset_response)

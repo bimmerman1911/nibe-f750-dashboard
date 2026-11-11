@@ -28,6 +28,7 @@ class Controller:
         self.accounting = Accounting(getattr(getattr(hass,'config',None),'time_zone','Europe/Stockholm'))
         self.costs = {}
         self.last_accounting_save = 0
+        self.air_history_task = None
         self.history_task = None
         self.data = {'enabled': True, 'last_cycle': 0, 'last_attempt': 0, 'release_dhw':False,'dhw_morning_pending':False,'dhw_morning_completed_date':None}
         self.status = 'Starting'
@@ -71,10 +72,30 @@ class Controller:
             raise ValueError('Invalid persisted controller state')
         self.unsubscribe = async_track_time_interval(self.hass, self.async_tick, timedelta(minutes=1))
         await self.async_tick()
+        if (not self.offset_learner.air_limit.observations and 'recorder' in getattr(getattr(self.hass,'config',None),'components',set()) and hasattr(self.hass,'async_create_background_task')):
+            self.air_history_task=self.hass.async_create_background_task(self.async_backfill_air_limit(),'NIBE evaporator calibration history')
         if (not self.accounting.history_checked and 'recorder' in getattr(getattr(self.hass,'config',None),'components',set())
             and hasattr(self.hass,'async_create_background_task')):
             cutoff=min([self.accounting.previous['time'] if self.accounting.previous else self.clock()]+[r.get('observed_start',t) for t,r in self.accounting.bins.items() if r.get('seconds')])
             self.history_task=self.hass.async_create_background_task(self.async_backfill_accounting(cutoff),'NIBE electricity history')
+
+    async def async_backfill_air_limit(self):
+        try:
+            from .air_limit import backfill,AirLimit
+            data=await backfill(self.hass,self.clock())
+            restored=AirLimit()
+            if not restored.restore(data):return
+            async with self.lock:
+                if self.stopping:return
+                live=self.offset_learner.air_limit
+                unique={int(r['time']//600):r for r in restored.observations+live.observations}
+                live.observations=sorted(unique.values(),key=lambda r:r['time'])[-9:]
+                if restored.sustained and 0<=self.clock()-restored.sustained['time']<=86400 and (not live.sustained or self.clock()-live.sustained['time']>86400 or restored.sustained['hz']>live.sustained['hz']):live.sustained=restored.sustained
+                await self.offset_store.async_save(self.offset_learner.dump())
+                if self.predictor:self.predictor.last_refresh=None
+                self.notify()
+        except Exception:
+            _LOGGER.exception('Evaporator history unavailable; calibration continues from live observations')
 
     async def async_backfill_accounting(self, cutoff):
         try:
@@ -116,6 +137,10 @@ class Controller:
 
     async def async_stop(self):
         self.stopping = True
+        if self.air_history_task and not self.air_history_task.done():
+            self.air_history_task.cancel()
+            try:await self.air_history_task
+            except asyncio.CancelledError:pass
         if self.history_task and not self.history_task.done():
             self.history_task.cancel()
             try:
@@ -165,6 +190,7 @@ class Controller:
                 self.predictor.adaptive_model = {**self.learner.parameters(),'dhw_morning_pending':self.data['dhw_morning_pending'],'dhw_morning_completed':self._morning_completed(now)}
                 self.predictor.learning = self.learner.diagnostics()
                 self.predictor.offset_response = self.offset_learner.parameters()
+                self.predictor.air_limit = self.offset_learner.air_limit
                 self.predictor.command_not_before = max(now,float(self.data['last_cycle'])+902,float(self.data['last_attempt'])+902)
                 self.forecast = await asyncio.wait_for(self.predictor.async_update(states, now), timeout=30)
                 generated = self.forecast.get('generated_at')

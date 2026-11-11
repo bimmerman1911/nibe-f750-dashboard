@@ -195,7 +195,11 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
         if not all(isinstance(s.get(k),(int,float)) and math.isfinite(s[k]) for k in ('start','end','price','outdoor')) or abs(s['start']-previous_end)>1e-3 or s['end']<=s['start']:
             raise ValueError('Invalid or discontinuous planning timeline')
         previous_end=s['end']
-    cap=m['compressor_heat_kw'];aux_limit=max(0,m.get('auxiliary_limit_kw',0.))
+    reference_hz=m.get('frequency_reference_hz',max_hz)
+    if not isinstance(reference_hz,(int,float)) or not math.isfinite(reference_hz) or not max_hz<=reference_hz<=150:raise ValueError('Invalid frequency reference')
+    cap=m['compressor_heat_kw']*max_hz/reference_hz
+    m['dhw_fraction']=min(m['dhw_fraction'],max_hz/reference_hz)
+    aux_limit=max(0,m.get('auxiliary_limit_kw',0.))
     calibration=emitter_estimate({**sample,'time':sample.get('measurement_time',sample['time'])},room,m,emitter)
     conductance=calibration['conductance_kw_per_k']
     theta=response.get('theta',[.35,.25,.75,0.])
@@ -344,7 +348,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                             supply=max(15.,min(80.,supply+(equilibrium-supply)*(1-math.exp(-h/.5))))
                             stored,delivered=filtered_heat(stored,q,h,m.get('heating_lag_hours',1.))
                             r,w=thermal_step(r,w,chunk['outdoor'],h,delivered,qw,m,draw)
-                            hz=max_hz*fraction if dhw else max_hz*compressor/cap
+                            hz=reference_hz*fraction if dhw else max_hz*compressor/cap
                             bt12=m.get('dhw_supply_c',55.) if dhw else supply+1.5
                             power=max(0,hz*(.0161+.000208*(bt12-45)))
                             energy+=(power+extra+water_aux)*h;extra_energy+=(extra+water_aux)*h
@@ -449,7 +453,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
         'inline_kwh':best.aux,'compressor_only':best.aux<.01,'dhw_auxiliary_uncertain':aux_limit>0,'recovery_plan':recovery,'constraint_violation_score':best.violation,
         'dhw_deadline_shortfall_c':best.shortfall,'emitter':calibration,
         'planning':{'defer_until':strategy.until if isinstance(strategy,DeferHeat) else None,'strategy':'beam' if strategy is None else ('defer-bridge' if strategy.bridge else 'defer')+' until '+str(int(strategy.until)) if isinstance(strategy,DeferHeat) else 'price-aware '+str(strategy),'expanded':expanded,'command_period_seconds':COMMAND_SECONDS,'command_not_before':earliest,
-            'search_limited':limited,'comfort_margin_c':uncertainty,'known_hours':(end-now)/3600,'short_horizon':end-now<21600,
+            'search_limited':limited,'comfort_margin_c':uncertainty,'known_hours':(end-now)/3600,'frequency_limit':m.get('air_limit'),'available_compressor_heat_kw':cap,'frequency_reference_hz':reference_hz,'short_horizon':end-now<21600,
             'native_tank_goal_limited':native_goal_limited,'requested_tank_target_c':requested_tank_target,'terminal_heat_value_sek_per_kwh':heat_price,'heat_basis':'Frequency-based nominal heat; not metered'},
         'selection_score':[best.violation,best.cost+terminal(best)],
         'morning_shortfall':best.shortfall,'comfort_risk':best.comfort_risk,

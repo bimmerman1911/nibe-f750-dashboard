@@ -176,6 +176,11 @@ try {
   assert.equal(await card.locator('.weekly-costs tr[data-date="2026-11-04"] td').nth(1).textContent(),'8 SEK');
   assert.equal(await card.locator('[data-series="actual"]').count(),1);
   assert.equal(await card.locator('[data-series="predicted"]').count(),1);
+  await page.evaluate(()=>{
+    window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast.model.air_limit={effective_max_hz:75,calibrated:true};
+    document.querySelector('nibe-f750-smart-card').render();
+  });
+  assert.match(await card.locator('[data-air-limit]').textContent(),/75 Hz.*calibrated evaporator/);
   assert.equal(await card.getByText('Inline estimate',{exact:true}).count(),1);
   assert.equal(await card.locator('rect[data-inline-kw]').count(),3);
   assert.deepEqual(await card.locator('rect[data-inline-kw]').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('fill'))),['#d59a58','#d59a58','#d59a58']);

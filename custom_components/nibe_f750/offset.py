@@ -10,6 +10,7 @@ from .adaptive import bounded, filtered_heat
 from .predictive import thermal_step
 from .dhw import policy, charge
 from .native import emitter_estimate
+from .air_limit import AirLimit
 
 DM='sensor.vp_degree_minutes_2'
 
@@ -17,6 +18,7 @@ class OffsetLearner:
     def __init__(self):
         self.bank={'theta':[.35,.25,.75,0.], 'p':[[1. if i==j else 0. for j in range(4)] for i in range(4)]}
         self.emitter={}
+        self.air_limit=AirLimit()
         self.steady=[]
         self.gain=2.5
         self.start_dm=-60.
@@ -30,7 +32,7 @@ class OffsetLearner:
         self.revision=0
 
     def dump(self):
-        return {'version':1,'bank':self.bank,'gain':self.gain,'count':self.count,'error':self.error,'start_dm':self.start_dm,'start_samples':self.start_samples[:],'start_source':self.start_source,'aux_dm':self.aux_dm,'emitter':self.emitter}
+        return {'air_limit':self.air_limit.dump(),'version':1,'bank':self.bank,'gain':self.gain,'count':self.count,'error':self.error,'start_dm':self.start_dm,'start_samples':self.start_samples[:],'start_source':self.start_source,'aux_dm':self.aux_dm,'emitter':self.emitter}
 
     def restore(self,data):
         try:
@@ -50,12 +52,16 @@ class OffsetLearner:
             self.start_dm=median(samples) if samples else -60.
             self.aux_dm=data.get('aux_dm',-700)
             self.emitter=data.get('emitter',{}) if isinstance(data.get('emitter',{}),dict) else {}
+            self.air_limit.restore(data.get('air_limit'))
             self.bank=data['bank'];self.gain=data['gain'];self.count=data['count'];self.error=data['error']
             return True
         except (KeyError,TypeError,ValueError,AssertionError):
             return False
 
     def update(self,states,now,capacity):
+        revision=self.air_limit.revision
+        self.air_limit.update(states,now)
+        if self.air_limit.revision!=revision:self.revision+=1
         sample=inputs(states,now,capacity)
         if sample is not None and all(fresh(states.get(e),now) and number(states[e].state) is not None for e in ('sensor.ovanvaning_temperature','sensor.nedervaning_temperature')):
             room=sum(float(states[e].state) for e in ('sensor.ovanvaning_temperature','sensor.nedervaning_temperature'))/2

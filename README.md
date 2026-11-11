@@ -23,6 +23,16 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Airflow/evaporator frequency envelope — v0.26.0
+
+The compressor forecast now uses the simple relationship `f_limit ≈ k × airflow × (incoming air − evaporator limit)`. One coefficient is fitted from sustained high-demand space heating with BT16 near the owner's assumed −16.5°C floor. This is an empirical estimate, not a verified universal F750 firmware rule. Calibrated estimates use a 0.5°C floor margin and a 5% frequency margin, capped by the reported native maximum.
+
+Calibration requires ten minutes of stable frequency, airflow and incoming-air temperature with unsatisfied heating demand and stable BT16 near the floor. DHW, defrost, stale/duplicate readings, gaps and unstable operation are excluded. The integration can initialise from up to 48 hours of HA Recorder history without extra NIBE requests. Qualified observations and a sustained-operation fallback survive restarts.
+
+Before calibration is available, forecasts use a clearly labelled provisional observed-operation cap instead of assuming sustained 120 Hz. Sustained observations are conservative evidence of attainable operation, not proof of the true maximum. Prediction details show the cap and whether it is calibrated; diagnostics expose the coefficient, observations and assumptions. Current airflow/incoming-air temperature are held constant through each forecast and refreshed on subsequent plans; humidity and refrigerant conditions can still change achievable output.
+
+Available space-heat capacity and DHW frequency are reduced consistently with the cap. The original reported-frequency basis of the heat proxy is retained, preventing an artificial increase in heat per Hz. No compressor-speed, ventilation or protection settings are written. Update in Marketplace, restart HA and refresh the dashboard; no calibration switch, model reset or separate service is needed.
+
 ## Cost-first feasible planning — v0.25.0
 
 Earlier scoring could choose a higher electricity bill because weighted temperature preferences and an endpoint target of 20°C outweighed cost. The planner now protects configured limits, the morning DHW goal and its explicit temperature uncertainty margin first, then compares electricity cost plus necessary endpoint reserve. Preferred temperature, movement and diagnostic penalties are tie-breakers; they cannot buy extra expensive heating inside the protected band. Endpoint valuation no longer assumes the house must finish at 20°C or DHW at its preferred full target.
