@@ -23,6 +23,14 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Full known-price horizon — v0.24.0
+
+Price-aware room preferences now consider every available forecast interval, up to 24 hours. The eight-hour cutoff is removed. The search also constructs explicit alternatives that defer space heating until a later cheaper window, plus alternatives that supply only a comfort bridge before that window. Both an early meaningful price drop and the cheapest later two-hour window are considered, including opportunities beyond twelve hours.
+
+Every complete alternative uses the same native simulation, DHW reserve policy, comfort constraints and cost objective. Waiting is chosen only when it wins that comparison; cold rooms or limited later capacity can still require earlier heating. This is a bounded search, not a proof of a global optimum or measured savings. Actual heat-output prediction remains an installation-dependent uncertainty.
+
+The chart's default −12/+12-hour view is unchanged. Full-horizon decisions and candidate times/costs are available in integration diagnostics. The calculation budget, cloud-write gates and native protections are unchanged. Update in Marketplace, restart HA and refresh the browser; no model reset is needed.
+
 ## Room response and plan continuity — v0.23.0
 
 The predictor learns how the two measured rooms diverge during heating and coasting, so an accurate indoor average cannot hide faster cooling upstairs. This is a bounded differential correction to the shared house model, not an independently identified two-zone hydraulic model. It learns from valid 30-minute windows; existing learned coefficients remain usable immediately.

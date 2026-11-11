@@ -18,6 +18,39 @@ from .dhw import policy, charge, next_deadline
 
 COMMAND_SECONDS=960.
 
+@dataclass(frozen=True, slots=True)
+class DeferHeat:
+    until: float
+    bridge: bool=False
+
+
+def cheaper_windows(slots, now):
+    """Find explicit later buying opportunities across all known intervals.
+
+    Average prices over real durations (including partial quarters). Retain
+    both an early meaningful price drop and the cheapest two-hour window;
+    physics and comfort are checked by the complete command simulation.
+    """
+    if not slots:return []
+    windows=[]
+    for i,row in enumerate(slots):
+        if row['start']<now+COMMAND_SECONDS:continue
+        stop=min(row['start']+7200,slots[-1]['end'])
+        duration=sum(max(0,min(s['end'],stop)-s['start']) for s in slots[i:] if s['start']<stop)
+        if duration<3600:continue
+        price=sum(s['price']*max(0,min(s['end'],stop)-s['start']) for s in slots[i:] if s['start']<stop)/duration
+        windows.append((row['start'],price))
+    if not windows:return []
+    # A tiny price change is not a reason by itself to create a defer family.
+    drop=max(.05,abs(slots[0]['price'])*.05)
+    useful=[r for r in windows if r[1]<slots[0]['price']-drop]
+    if not useful:return []
+    first=useful[0];best=min(useful,key=lambda r:r[1])
+    selected=[first]
+    if best[0]-first[0]>=3600:selected.append(best)
+    return [time for time,_ in selected]
+
+
 @dataclass(slots=True)
 class State:
     room: float
@@ -54,7 +87,8 @@ def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
     started=monotonic()
     results=[]
     keep=bool(incumbent and 0<=now-incumbent.get('generated_at',0)<=1200 and incumbent.get('commands'))
-    strategies=(['previous'] if keep else [])+['flex', -3., -10., 0.]
+    windows=cheaper_windows(slots,now)
+    strategies=(['previous'] if keep else [])+['flex']+[DeferHeat(t,bridge) for t in windows for bridge in (False,True)]+[-3., -10., 0.]
     for strategy in strategies:
         if budget:
             budget.check_cancelled()
@@ -68,11 +102,13 @@ def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
     best=min(results,key=lambda r:tuple(r['selection_score']))
     best['planning']['search_seconds']=round(monotonic()-started,3)
     best['planning']['total_expanded']=sum(r['planning']['expanded'] for r in results)
+    best['planning']['price_lookahead_hours']=(slots[-1]['end']-now)/3600
+    best['planning']['defer_until_candidates']=windows
     best['planning']['candidate_schedules']=len(results)
     best['planning']['selected_strategy']=best['planning']['strategy']
     best['planning']['candidate_costs']=[{'strategy':r['planning']['strategy'],
         'cost':r['model_cost'],'violation':r['constraint_violation_score'],
-        'objective':r['selection_score'][1]} for r in results]
+        'objective':r['selection_score'][1],**r['objective_components'],'defer_until':r['planning'].get('defer_until')} for r in results]
     best['planning']['search_limited']=any(r['planning']['search_limited'] for r in results) or len(results)<len(strategies)+1
     return best
 
@@ -217,7 +253,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                 # hard-coded clock window. Restore heat ahead of a predicted
                 # comfort shortfall, including heat already in transit.
                 cheap=chunks[0]['price']<=median([s['price'] for s in slots[slot_index:]])
-                future=sorted(s['price'] for s in slots[slot_index:] if s['start']<cursor+8*3600)
+                future=sorted(s['price'] for s in slots[slot_index:])
                 low,high=future[len(future)//5],future[min(len(future)-1,4*len(future)//5)]
                 value=max(0.,min(1.,(high-chunks[0]['price'])/max(.1,high-low)))
                 floor=min(m['room_target_c'],m['room_min_c']+uncertainty+.15)
@@ -232,6 +268,15 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                 if not cheap and isinstance(strategy,(int,float)) and projected>m['room_min_c']+uncertainty:
                     wanted=strategy
                 offsets=[min(levels,key=lambda v:abs(v-wanted))]
+                if isinstance(strategy,DeferHeat):
+                    # Before the cheaper window, either coast strictly or
+                    # supply only a modelled comfort bridge. They are separate
+                    # complete alternatives; neither bypasses actual limits.
+                    target=m['room_target_c'] if cursor>=strategy.until else min(m['room_target_c'],m['room_min_c']+uncertainty+.1)
+                    need=max(0.,min(cap,load+(target-projected)*m['thermal_capacity_kwh_per_k']/delay))
+                    desired=previous.room+need/conductance
+                    wanted=sample['offset']+(desired-sample['required']+1.2*(chunks[0]['outdoor']-sample['outside']))/gain
+                    offsets=[min(levels,key=lambda v:abs(v-wanted))] if cursor>=strategy.until or strategy.bridge else [levels[0]]
                 if strategy=='previous':
                     old=next((c for c in incumbent['commands'] if c['start']<=cursor<c['end']),None)
                     if old and number(old.get('offset')) is not None and old.get('dhw_mode') in ('Economy','Normal'):
@@ -360,8 +405,9 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
         'model':m,'initial_room':room,'initial_water':water,'horizon_end':end,'model_cost':best.cost,
         'inline_kwh':best.aux,'compressor_only':best.aux<.01,'dhw_auxiliary_uncertain':aux_limit>0,'recovery_plan':recovery,'constraint_violation_score':best.violation,
         'dhw_deadline_shortfall_c':best.shortfall,'emitter':calibration,
-        'planning':{'strategy':'beam' if strategy is None else 'price-aware '+str(strategy),'expanded':expanded,'command_period_seconds':COMMAND_SECONDS,'command_not_before':earliest,
+        'planning':{'defer_until':strategy.until if isinstance(strategy,DeferHeat) else None,'strategy':'beam' if strategy is None else ('defer-bridge' if strategy.bridge else 'defer')+' until '+str(int(strategy.until)) if isinstance(strategy,DeferHeat) else 'price-aware '+str(strategy),'expanded':expanded,'command_period_seconds':COMMAND_SECONDS,'command_not_before':earliest,
             'search_limited':limited,'comfort_margin_c':uncertainty,'known_hours':(end-now)/3600,'short_horizon':end-now<21600,
             'native_tank_goal_limited':native_goal_limited,'requested_tank_target_c':requested_tank_target,'terminal_heat_value_sek_per_kwh':heat_price,'heat_basis':'Frequency-based nominal heat; not metered'},
         'selection_score':[best.violation,best.cost+best.penalty+terminal(best)],
+        'objective_components':{'electricity':best.cost,'control_penalties':best.penalty,'terminal_reserve':terminal(best)},
         'offset_response':response}
