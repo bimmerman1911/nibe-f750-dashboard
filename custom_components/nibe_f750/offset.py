@@ -9,7 +9,7 @@ from .engine import C1, REQUIRED, SUPPLY, PRIORITY, fresh, number
 from .adaptive import bounded, filtered_heat
 from .predictive import thermal_step
 from .dhw import policy, charge
-from .native import emitter_estimate
+from .native import emitter_estimate, primary_degree_minutes_step
 from .air_limit import AirLimit
 
 DM='sensor.vp_degree_minutes_2'
@@ -247,7 +247,7 @@ def plan_offsets(result,states,now,response,min_hz,max_hz,budget=None):
                     auxiliary=0. if dhw or dm>response.get('aux_dm',-700) else min(m.get('auxiliary_limit_kw',0),max(0,heat-cap))
                     q=compressor+auxiliary
                     if not dhw:
-                        dm=bounded(dm+(supply-required)*h*60,-3000,1000)
+                        dm=primary_degree_minutes_step(dm,supply,required,h)
                     equilibrium=r+q/conductance
                     supply=bounded(supply+bounded((equilibrium-supply)*(1-math.exp(-h/.5)),-120*h,120*h),15,80)
                     stored,delivered=filtered_heat(stored,q,h,m.get('heating_lag_hours',1))

@@ -10,6 +10,18 @@ def _finite(value):
     return isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value)
 
 
+def primary_degree_minutes_step(degree_minutes, primary_supply, primary_target, hours):
+    """Integrate C1 supply error, in degree-minutes, during space heating.
+
+    The ECS secondary target regulates its mixing valve. It is not an input
+    here. Secondary heat extraction can still change the actual primary supply.
+    Callers retain the existing hold during DHW charging.
+    """
+    if not all(_finite(v) for v in (degree_minutes,primary_supply,primary_target,hours)) or hours<0:
+        raise ValueError('Invalid primary degree-minute inputs')
+    return max(-3000.,min(1000.,degree_minutes+(primary_supply-primary_target)*hours*60))
+
+
 def response_step(heat, supply_error, degree_minutes, hours, theta, capacity):
     """Advance the learned *15-minute* ARX map over an arbitrary interval.
 

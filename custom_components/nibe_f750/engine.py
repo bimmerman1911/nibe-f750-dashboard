@@ -7,6 +7,8 @@ ROOM1 = 'sensor.ovanvaning_temperature'
 ROOM2 = 'sensor.nedervaning_temperature'
 SUPPLY = 'sensor.vp_supply_line_bt61'
 REQUIRED = 'sensor.vp_calculated_supply_climate_system_1'
+# C1's calculated target drives the primary supply-error/degree-minute model.
+# C2's target belongs to its ECS mixing valve, never a second compressor demand.
 PRIORITY = 'sensor.vp_priority'
 PRICE = 'sensor.nordpool_kwh_se3_sek_3_10_025'
 DHW = 'select.vp_comfort_mode'
@@ -62,6 +64,7 @@ def calculate(states, now, hour, persistent_shortfall=False, control=None, optio
     shortfall = bool(heating and water_valid and value(SUPPLY) < value(REQUIRED)-2)
     secondary_warmer = r2 > r1
     increase = bool(heating and water_valid and (not shortfall or not secondary_warmer))
+    # This adjusts the native shunt target only. Primary production remains C1.
     next2 = current2 + (-1 if e2 < -.3 or (persistent_shortfall and shortfall and secondary_warmer)
                         else 1 if e2 > .3 and increase else 0)
     # Economy is an intentional DHW deferral preset, not a lower reserve.

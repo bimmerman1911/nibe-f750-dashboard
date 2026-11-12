@@ -9,9 +9,9 @@ from zoneinfo import ZoneInfo
 import math
 from statistics import median
 from time import monotonic
-from .engine import ROOM1, ROOM2, C1, DHW, fresh, number
+from .engine import ROOM1, ROOM2, C1, C2, SUPPLY, REQUIRED, DHW, fresh, number
 from .offset import inputs, offset_levels
-from .native import response_step, emitter_estimate, attainable_supply
+from .native import response_step, emitter_estimate, attainable_supply, primary_degree_minutes_step
 from .adaptive import filtered_heat
 from .predictive import DEFAULTS, thermal_step
 from .dhw import policy, charge, next_deadline
@@ -357,7 +357,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                             compressor=0. if dhw or not running else max(cap*min_hz/max_hz,min(cap,heat))
                             extra=0. if dhw or dm>response.get('aux_dm',-700) else min(aux_limit,max(0,heat-cap))
                             q=compressor+extra
-                            if not dhw:dm=max(-3000.,min(1000.,dm+(supply-required)*h*60))
+                            if not dhw:dm=primary_degree_minutes_step(dm,supply,required,h)
                             equilibrium=r+q/conductance
                             supply=max(15.,min(80.,supply+(equilibrium-supply)*(1-math.exp(-h/.5))))
                             stored,delivered=filtered_heat(stored,q,h,m.get('heating_lag_hours',1.))
@@ -468,6 +468,8 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
         'dhw_deadline_shortfall_c':best.shortfall,'emitter':calibration,
         'planning':{'defer_until':strategy.until if isinstance(strategy,DeferHeat) else None,'strategy':'beam' if strategy is None else ('defer-bridge' if strategy.bridge else 'defer')+' until '+str(int(strategy.until)) if isinstance(strategy,DeferHeat) else 'price-aware '+str(strategy),'expanded':expanded,'command_period_seconds':COMMAND_SECONDS,'command_not_before':earliest,
             'initial_state':{**sample,'rooms':rooms,'water':water,'dhw_mode':native_mode.state,'offset_grid':levels},
+            'actuator_roles':{'degree_minutes':{'offset':C1,'target':REQUIRED,'supply':SUPPLY},
+                'secondary':{'offset':C2,'target':'sensor.vp_calculated_supply_climate_system_2','role':'mixing-valve target; indirect load on primary circuit'}},
             'search_limited':limited,'comfort_margin_c':uncertainty,'known_hours':(end-now)/3600,'frequency_limit':m.get('air_limit'),'available_compressor_heat_kw':cap,'frequency_reference_hz':reference_hz,'short_horizon':end-now<21600,
             'native_tank_goal_limited':native_goal_limited,'requested_tank_target_c':requested_tank_target,'terminal_heat_value_sek_per_kwh':heat_price,'heat_basis':'Frequency-based nominal heat; not metered'},
         'selection_score':[best.violation,best.cost+terminal(best)],

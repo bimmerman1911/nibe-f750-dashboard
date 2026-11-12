@@ -20,6 +20,7 @@ jobs:
       - run: python tests/activity_test.py
       - run: python tests/air_limit_test.py
       - run: python tests/timing_test.py
+      - run: python tests/primary_circuit_test.py
       - run: python tests/economic_selection_test.py
       - run: python tests/offset_test.py
       - run: python tests/dhw_test.py

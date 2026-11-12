@@ -23,6 +23,10 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Explicit primary/secondary actuator roles — v0.27.1
+
+The C1 target is the primary degree-minute/compressor-control reference. C2's target regulates its ECS mixing valve; it does not directly drive degree minutes. Secondary heat extraction can still lower actual primary supply and therefore affect degree minutes indirectly. This was already the basis of the joint planner; it is now centralised in a named primary-circuit transition shared with the legacy offset model, exposed in diagnostics, and covered by regression tests. The model equation, comfort constraints, C2 room feedback, warm-secondary-only suppression and cloud-write limits are preserved. No new shunt/flow model is claimed. See [hydraulic control roles and verification](docs/hydraulic-control.md).
+
 ## Full-trajectory price timing comparisons — v0.27.0
 
 The planner now explicitly challenges its selected schedule with coupled edits that reduce demand during expensive periods and increase demand in cheaper periods, before or after them. It also tests earlier offset changes to account for degree-minute stop/start lag and repairs demand blocks across the horizon. Every alternative is replayed through the same native-response, room-temperature, DHW, capacity and price model. Commands remain on the existing 16-minute timeline; edits preserve locked periods and DHW choices, and native DHW reserve rules still apply during replay.
