@@ -17,6 +17,9 @@ from .predictive import DEFAULTS, thermal_step
 from .dhw import policy, charge, next_deadline
 
 COMMAND_SECONDS=960.
+# SEK per squared degree-hour inside the uncertainty buffer. Actual configured
+# limits remain lexicographic constraints; marginal buffer risk has finite cost.
+COMFORT_RISK_PRICE=100.
 
 @dataclass(frozen=True, slots=True)
 class DeferHeat:
@@ -81,10 +84,11 @@ def selection_key(result):
     """Price optimisation within configured comfort and morning reserves.
 
     In-band temperature preferences cannot buy extra expensive heat. Only
-    necessary endpoint reserves carry an economic value into the next horizon.
+    necessary endpoint reserves carry value into the next horizon. Uncertainty
+    buffer exposure has finite cost, so tiny differences cannot override price.
     """
     return (result['constraint_violation_score'],result['morning_shortfall'],
-            result.get('comfort_risk',0.),result['selection_score'][1],result['inline_kwh'],
+            result['selection_score'][1]+COMFORT_RISK_PRICE*result.get('comfort_risk',0.),result['inline_kwh'],
             result['objective_components']['control_penalties'])
 
 
@@ -369,8 +373,8 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                             below=max(0,m['room_min_c']+uncertainty-cold)
                             above=max(0,warm-m['room_max_c']+uncertainty)
                             tank_below=max(0,m['tank_min_c']+1-w)
-                            # Explicit uncertainty protection, rather than a
-                            # monetary preference for warmer-than-required rooms.
+                            # Soft uncertainty buffer; actual configured bounds are
+                            # protected separately by the violation objective.
                             comfort_risk+=h*(max(0,below-.02)**2+max(0,above-.02)**2)
                             violation+=h*(max(0,m['room_min_c']-cold)**2+max(0,warm-m['room_max_c'])**2+.1*max(0,m['tank_min_c']-w)**2)
                             penalty+=h*(1200*(below*below+above*above)+150*tank_below*tank_below
@@ -405,7 +409,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                              'locked':holding,'action':'dhw' if any(q['action']=='dhw' for q in pieces) else 'heat' if any(q['action']=='heat' for q in pieces) else 'off','reason':(reserve['dhw_reason'] if reserve['dhw']=='Normal' else 'Scheduled DHW period') if mode=='Normal' else 'Price and stored-heat optimisation'}
                     candidates.append(State(r,w,supply,heat,stored,dm,running,charging,pending,offset,mode,
                         cost,penalty,auxiliary_energy,miss,previous,command,pieces,completed_day=completed_day,violation=violation,room_delta=room_delta,comfort_risk=comfort_risk))
-        rank=lambda n:(n.violation,n.shortfall+deadline_risk(n),n.comfort_risk,n.cost+terminal(n),n.aux,n.penalty)
+        rank=lambda n:(n.violation,n.shortfall+deadline_risk(n),n.cost+terminal(n)+COMFORT_RISK_PRICE*n.comfort_risk,n.aux,n.penalty)
         candidates.sort(key=rank)
         diverse={}
         for n in candidates:
@@ -427,7 +431,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
         beam=sorted(selected,key=rank)
         if not beam:raise ValueError('No bounded joint plan found')
         cursor=stop
-    best=min(beam,key=lambda n:(n.violation,n.shortfall,n.comfort_risk,n.cost+terminal(n),n.aux,n.penalty))
+    best=min(beam,key=lambda n:(n.violation,n.shortfall,n.cost+terminal(n)+COMFORT_RISK_PRICE*n.comfort_risk,n.aux,n.penalty))
     commands=[];pieces=[];node=best
     while node.parent is not None:
         commands.append(node.command);pieces.extend(reversed(node.pieces));node=node.parent
@@ -457,5 +461,5 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
             'native_tank_goal_limited':native_goal_limited,'requested_tank_target_c':requested_tank_target,'terminal_heat_value_sek_per_kwh':heat_price,'heat_basis':'Frequency-based nominal heat; not metered'},
         'selection_score':[best.violation,best.cost+terminal(best)],
         'morning_shortfall':best.shortfall,'comfort_risk':best.comfort_risk,
-        'objective_components':{'electricity':best.cost,'control_penalties':best.penalty,'terminal_reserve':terminal(best)},
+        'objective_components':{'electricity':best.cost,'control_penalties':best.penalty,'terminal_reserve':terminal(best),'uncertainty_cost':COMFORT_RISK_PRICE*best.comfort_risk},
         'offset_response':response}

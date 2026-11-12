@@ -17,6 +17,18 @@ class EconomicTests(unittest.TestCase):
         self.assertIs(min([cheap,result(40,0,violation=.1)],key=joint.selection_key),cheap)
         self.assertIs(min([cheap,result(40,0,morning=1)],key=joint.selection_key),cheap)
 
+    def test_live_tiny_buffer_difference_cannot_override_electricity_savings(self):
+        def result(cost,risk,violation=0):
+            return {'constraint_violation_score':violation,'morning_shortfall':0,
+                    'selection_score':[violation,cost],'comfort_risk':risk,
+                    'inline_kwh':0,'objective_components':{'control_penalties':0}}
+        expensive=result(27.3324,.00091595)
+        cheap=result(21.9404,.00117743)
+        self.assertIs(min([expensive,cheap],key=joint.selection_key),cheap)
+        self.assertIs(min([cheap,result(1,0,.001)],key=joint.selection_key),cheap)
+        # A substantial uncertainty exposure still has an economic consequence.
+        self.assertIs(min([expensive,result(21.94,.2)],key=joint.selection_key),expensive)
+
     def test_actual_delayed_response_case_selects_least_economic_score_when_feasible(self):
         slots,states,model,response,emitter=scenario()
         result=joint.plan(slots,states,NOW,model,response,max_hz=89,emitter=emitter)

@@ -23,6 +23,12 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Finite uncertainty-buffer cost — v0.26.1
+
+The planner previously ranked even tiny differences in uncertainty-buffer exposure ahead of any electricity saving. A live case selected 27.33 SEK over a 21.94 SEK candidate despite both respecting the configured limits and DHW deadline. Buffer exposure now has a finite cost of 100 SEK per squared degree-hour, used consistently in beam pruning, rollout comparison and final selection. A 0.05°C residual buffer intrusion lasting one hour costs 0.25 SEK after the existing 0.02°C deadband. Actual configured temperature-limit violations and morning DHW shortfalls retain priority over cost. Diagnostics expose the uncertainty cost separately; this is a tunable engineering valuation, not a guarantee against forecast error.
+
+Update in Marketplace and restart HA; existing settings and cloud-write limits are preserved.
+
 ## Airflow/evaporator frequency envelope — v0.26.0
 
 The compressor forecast now uses the simple relationship `f_limit ≈ k × airflow × (incoming air − evaporator limit)`. One coefficient is fitted from sustained high-demand space heating with BT16 near the owner's assumed −16.5°C floor. This is an empirical estimate, not a verified universal F750 firmware rule. Calibrated estimates use a 0.5°C floor margin and a 5% frequency margin, capped by the reported native maximum.
