@@ -15,6 +15,8 @@ from .native import response_step, emitter_estimate, attainable_supply
 from .adaptive import filtered_heat
 from .predictive import DEFAULTS, thermal_step
 from .dhw import policy, charge, next_deadline
+from .timing import improve as improve_timing
+from .work import ReservedBudget
 
 COMMAND_SECONDS=960.
 # SEK per squared degree-hour inside the uncertainty buffer. Actual configured
@@ -130,21 +132,29 @@ def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
         candidate['planning']['strategy']='coast-patch until '+str(int(until))
         candidate['planning']['defer_until']=until
         results.append(candidate)
-    if budget is None or budget.remaining()>=3.:
+    if budget is None or budget.remaining()>=6.:
         results.append(_search(slots,states,now,model,response,min_hz,max_hz,
-            command_not_before,budget,emitter,width=width))
+            command_not_before,ReservedBudget(budget,3.) if budget else None,emitter,width=width))
     base_search_complete=base_search_complete and (budget is None or any(r['planning']['strategy']=='beam' for r in results))
     best=min(results,key=selection_key)
+    seed=best
+    expanded=sum(r['planning']['expanded'] for r in results)
+    def replay(commands):
+        return _search(slots,states,now,model,response,min_hz,max_hz,
+            command_not_before,budget,emitter,width=1,strategy='previous',incumbent={'commands':commands})
+    alternatives=[r for r in results if r['planning']['strategy'] in ('price-aware previous','price-aware flex')]
+    best=improve_timing(seed,slots,offset_levels(states[C1]),replay,selection_key,budget,alternatives=alternatives)
+    if best is not seed:results.append(best)
     best['planning']['search_seconds']=round(monotonic()-started,3)
-    best['planning']['total_expanded']=sum(r['planning']['expanded'] for r in results)
+    best['planning']['total_expanded']=expanded+best['planning']['timing_comparison']['expanded']
     best['planning']['price_lookahead_hours']=(slots[-1]['end']-now)/3600
     best['planning']['defer_until_candidates']=windows
     best['planning']['candidate_schedules']=len(results)
     best['planning']['selected_strategy']=best['planning']['strategy']
     best['planning']['candidate_costs']=[{'strategy':r['planning']['strategy'],
         'cost':r['model_cost'],'violation':r['constraint_violation_score'],
-        'objective':r['selection_score'][1],'morning_shortfall':r['morning_shortfall'],'comfort_risk':r['comfort_risk'],**r['objective_components'],'defer_until':r['planning'].get('defer_until')} for r in results]
-    best['planning']['search_limited']=any(r['planning']['search_limited'] for r in results) or not base_search_complete
+        'objective':r['selection_score'][1],'ranked_objective':selection_key(r)[2],'morning_shortfall':r['morning_shortfall'],'comfort_risk':r['comfort_risk'],**r['objective_components'],'defer_until':r['planning'].get('defer_until')} for r in results]
+    best['planning']['search_limited']=any(r['planning']['search_limited'] for r in results) or not base_search_complete or best['planning']['timing_comparison']['budget_limited']
     return best
 
 
@@ -457,6 +467,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
         'inline_kwh':best.aux,'compressor_only':best.aux<.01,'dhw_auxiliary_uncertain':aux_limit>0,'recovery_plan':recovery,'constraint_violation_score':best.violation,
         'dhw_deadline_shortfall_c':best.shortfall,'emitter':calibration,
         'planning':{'defer_until':strategy.until if isinstance(strategy,DeferHeat) else None,'strategy':'beam' if strategy is None else ('defer-bridge' if strategy.bridge else 'defer')+' until '+str(int(strategy.until)) if isinstance(strategy,DeferHeat) else 'price-aware '+str(strategy),'expanded':expanded,'command_period_seconds':COMMAND_SECONDS,'command_not_before':earliest,
+            'initial_state':{**sample,'rooms':rooms,'water':water,'dhw_mode':native_mode.state,'offset_grid':levels},
             'search_limited':limited,'comfort_margin_c':uncertainty,'known_hours':(end-now)/3600,'frequency_limit':m.get('air_limit'),'available_compressor_heat_kw':cap,'frequency_reference_hz':reference_hz,'short_horizon':end-now<21600,
             'native_tank_goal_limited':native_goal_limited,'requested_tank_target_c':requested_tank_target,'terminal_heat_value_sek_per_kwh':heat_price,'heat_basis':'Frequency-based nominal heat; not metered'},
         'selection_score':[best.violation,best.cost+terminal(best)],

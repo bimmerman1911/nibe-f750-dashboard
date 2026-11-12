@@ -20,3 +20,14 @@ class PlanningBudget:
     def check(self):
         if self.cancelled.is_set() or self.clock()>=self.deadline:
             raise RuntimeError('Planning computation budget reached; using temperature control until the next retry.')
+
+
+class ReservedBudget:
+    """Share cancellation while reserving parent time for complete replays."""
+    def __init__(self,parent,seconds):
+        self.parent=parent;self.seconds=seconds
+    def remaining(self):return max(0.,self.parent.remaining()-self.seconds)
+    def check_cancelled(self):self.parent.check_cancelled()
+    def check(self):
+        self.parent.check_cancelled()
+        if self.remaining()<=0:raise RuntimeError('Reserved planning budget reached')

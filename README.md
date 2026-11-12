@@ -23,6 +23,16 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Full-trajectory price timing comparisons — v0.27.0
+
+The planner now explicitly challenges its selected schedule with coupled edits that reduce demand during expensive periods and increase demand in cheaper periods, before or after them. It also tests earlier offset changes to account for degree-minute stop/start lag and repairs demand blocks across the horizon. Every alternative is replayed through the same native-response, room-temperature, DHW, capacity and price model. Commands remain on the existing 16-minute timeline; edits preserve locked periods and DHW choices, and native DHW reserve rules still apply during replay.
+
+The comparison uses multiple starting schedules and accepts only an improvement in the existing constrained objective. Actual comfort violations and morning DHW shortfalls retain priority; within those constraints, electricity, endpoint reserves and the finite uncertainty-buffer cost determine the choice. No new objective weights or relaxed temperature limits are introduced. This is a bounded search, not a proof of the global optimum.
+
+CPU work is bounded by at most 256 additional full replays and the shared planning deadline. Beam search reserves time for this comparison; cancellation remains shared. Diagnostics include the initial simulation state, tested replay count, before/after costs and constraint scores, accepted improvements, and examples of cheaper alternatives rejected by the objective. A budget-limited result retains the best completely evaluated plan.
+
+Update in Marketplace, restart Home Assistant and refresh the dashboard. Existing learning, configured limits and cloud-write restrictions are preserved. No setup or model reset is required.
+
 ## Finite uncertainty-buffer cost — v0.26.1
 
 The planner previously ranked even tiny differences in uncertainty-buffer exposure ahead of any electricity saving. A live case selected 27.33 SEK over a 21.94 SEK candidate despite both respecting the configured limits and DHW deadline. Buffer exposure now has a finite cost of 100 SEK per squared degree-hour, used consistently in beam pruning, rollout comparison and final selection. A 0.05°C residual buffer intrusion lasting one hour costs 0.25 SEK after the existing 0.02°C deadband. Actual configured temperature-limit violations and morning DHW shortfalls retain priority over cost. Diagnostics expose the uncertainty cost separately; this is a tunable engineering valuation, not a guarantee against forecast error.

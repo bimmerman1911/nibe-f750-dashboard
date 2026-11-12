@@ -32,8 +32,8 @@ class EconomicTests(unittest.TestCase):
     def test_actual_delayed_response_case_selects_least_economic_score_when_feasible(self):
         slots,states,model,response,emitter=scenario()
         result=joint.plan(slots,states,NOW,model,response,max_hz=89,emitter=emitter)
-        feasible=[c for c in result['planning']['candidate_costs'] if c['violation']==0 and c['morning_shortfall']==0 and c['comfort_risk']==0]
-        self.assertEqual(result['selection_score'][1],min(c['objective'] for c in feasible))
+        feasible=[c for c in result['planning']['candidate_costs'] if c['violation']==0 and c['morning_shortfall']==0]
+        self.assertEqual(joint.selection_key(result)[2],min(c['ranked_objective'] for c in feasible))
         self.assertTrue(any(c['strategy'].startswith('coast-patch') for c in result['planning']['candidate_costs']))
         self.assertAlmostEqual(result['selection_score'][1],result['model_cost']+result['objective_components']['terminal_reserve'])
         self.assertGreaterEqual(min(s['room1'] for s in result['steps']),model['room_min_c'])
