@@ -70,6 +70,24 @@ try {
     const registry=[{platform:'myuplink',device_id:'pump',entity_id:'sensor.vp_reference_air_speed_sensor',unique_id:'device-new-id'},{platform:'myuplink',device_id:'pump',entity_id:'sensor.vp_condenser_out_bt12',unique_id:'device-new-bt12-id'},{platform:'myuplink',device_id:'pump',entity_id:'sensor.vp_current_compressor_frequency',unique_id:'device-new-frequency-id'}];
     return {normal:run({}),warmer:run({bt12:state(55,'°C')}),cooler:run({bt12:state(35,'°C')}),fahrenheit:run({bt12:state(113,'°F')}),litres:run({ref:state(50,'l/s')}),off:run({f:state(0,'Hz')}),badFrequency:run({f:state(-1,'Hz')}),wrongFrequencyUnit:run({f:state(50,'rpm')}),blank:run({f:state('','Hz')}),missingBT12:run({bt12:state('unavailable','°C')}),badModel:run({bt12:state(-100,'°C')}),wrongFlowUnit:run({ref:state(60,'%'),air:state('unavailable','m³/h')}),measuredFallback:run({ref:state('unavailable','m³/h')}),reversedAir:run({discharge:state(30,'°C')}),missing:calculateHeat({},entities),corrupt:run({bad_flow:state(999999,'l/min'),bad_return:state(-999,'°C'),unused_power:state(9999,'kW'),heater:state(6,'kW')}),found:discoverEntities(registry,'pump').entities};
   });
+  const retained=await page.evaluate(async()=>{
+    const {calculateHeat}=await import('/dist/nibe-f750-card.js');
+    const state=(state,unit)=>({state:String(state),attributes:{unit_of_measurement:unit}});
+    const entities={reference_air_flow:'ref',exhaust_air:'in',leaving_air:'out'};
+    const states={ref:state(180,'m³/h'),in:state(21,'°C'),out:state(-3,'°C')},history={};
+    const first=calculateHeat(states,entities,history).qEvaporator;
+    states.ref=state('Unknown','m³/h');
+    const unknown=calculateHeat(states,entities,history).qEvaporator;
+    const restored=calculateHeat(states,entities,JSON.parse(JSON.stringify(history))).qEvaporator;
+    const other=calculateHeat(states,{...entities,reference_air_flow:'other'},history).qEvaporator;
+    states.ref=state(90,'m³/h');calculateHeat(states,entities,history);
+    states.ref=state('unknown','m³/h');
+    return {first,unknown,restored,other,updated:calculateHeat(states,entities,history).qEvaporator};
+  });
+  assert.equal(retained.unknown,retained.first);
+  assert.equal(retained.restored,retained.first);
+  assert.equal(retained.updated,retained.first/2);
+  assert.equal(retained.other,null);
   assert.ok(Math.abs(cases.normal.compressor-.805)<1e-10);
   assert.ok(Math.abs(cases.warmer.compressor-.909)<1e-10);
   assert.ok(Math.abs(cases.cooler.compressor-.701)<1e-10);

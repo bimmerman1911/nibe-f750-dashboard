@@ -74,8 +74,8 @@ export function discoverEntities(registry, deviceId, states = {}) {
 }
 // Owner-supplied empirical power model: f in Hz, BT12 in °C, result in kW.
 // Condenser heat is derived independently from air-side Q + modeled P;
-// corrupt liquid-flow readings, reported power and history are never used.
-export function calculateHeat(states, entities) {
+// Corrupt liquid-flow readings and reported compressor power are never used.
+export function calculateHeat(states, entities, referenceHistory={}) {
   const read = (key,kind) => {
     const s=states[entities[key]];
     if(!s || String(s.state ?? '').trim()==='' || ['unknown','unavailable'].includes(s.state)) return null;
@@ -91,7 +91,14 @@ export function calculateHeat(states, entities) {
   const power=f!==null && f>=0 && coefficient!==null && coefficient>=0 ? f*coefficient : null;
   const compressor=Number.isFinite(power)?power:null;
   const extract=read('exhaust_air','temperature'),discharge=read('leaving_air','temperature');
-  const reference=read('reference_air_flow','flow'),measured=read('air_flow','flow');
+  let reference=read('reference_air_flow','flow');
+  const referenceId=entities.reference_air_flow;
+  if(referenceId && reference!==null && reference>=0) referenceHistory[referenceId]=reference;
+  else if(String(states[referenceId]?.state).trim().toLowerCase()==='unknown') {
+    const previous=referenceHistory[referenceId];
+    if(typeof previous==='number' && Number.isFinite(previous) && previous>=0) reference=previous;
+  }
+  const measured=read('air_flow','flow');
   const useReference=reference!==null && reference>=0;
   const air=useReference?reference:measured;
   const sensible=air!==null && air>=0 && extract!==null && discharge!==null && extract>=discharge ? 1.2*1.006*air*(extract-discharge) : null;
@@ -351,7 +358,15 @@ export class NibeF750Card extends HTMLElement {
     const dhw=/hot water|dhw/.test(mode),heating=!dhw && /heating/.test(mode);
     const air=['air_flow','reference_air_flow'].some(k=>this.available(this.state(k)) && Number(this.state(k).state)>0);
     const activity={refrigerant:running,water,heating:water&&heating,dhw:water&&dhw,air};
-    this._heat=calculateHeat(this._hass?.states || {},this.config.entities);
+    if(!this._referenceFlows) {
+      try {const saved=JSON.parse(localStorage.getItem('nibe-f750-reference-flows'));this._referenceFlows=saved && typeof saved==='object' && !Array.isArray(saved)?saved:{};}
+      catch {this._referenceFlows={};}
+    }
+    const previousFlows=JSON.stringify(this._referenceFlows);
+    this._heat=calculateHeat(this._hass?.states || {},this.config.entities,this._referenceFlows);
+    if(JSON.stringify(this._referenceFlows)!==previousFlows) {
+      try {localStorage.setItem('nibe-f750-reference-flows',JSON.stringify(this._referenceFlows));} catch {}
+    }
     this.shadowRoot.innerHTML = `<style>${css}</style><ha-card><div class="body">
       <section class="panel schematic">
       <div class="scheme-scroll" tabindex="0" role="region" aria-label="Combined circuit diagram">
