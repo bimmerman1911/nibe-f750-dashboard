@@ -23,6 +23,18 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Coordinated production and recovery — v0.28.0
+
+C1 remains the primary production/degree-minute actuator. The planner and live dispatch now share a 48-minute direction commitment: a large initial move is allowed, but ordinary reversals wait three command periods. A measured or simulated room-limit breach can override this hold. Direction and change time persist across restarts; existing rolling cloud-write limits still apply, including emergencies. Forecasts simulate this commitment rather than applying an unexplained output slew limit afterward.
+
+C2's upward adjustment freezes when its requested supply temperature is already at or above available primary supply minus 1°C. This is anti-windup, not deliberate suppression of a colder secondary room. Existing warm-secondary-only primary-protection reduction remains. Primary fallback demand now considers the colder of both rooms and can recover a negative offset promptly instead of climbing one step per command window.
+
+When required room inputs are invalid/stale, a valid fresh primary actuator reading permits releasing a negative offset to zero (the configured native heating curve), with Normal DHW restored. No room temperature is invented or reused for forecasting. Unknown/stale actuator readings do not authorise a guessed primary write. Zero offset is a native-curve fallback, not a guarantee of room temperature; existing native curve settings still matter.
+
+The differential room response now scales against the learned mean heating power of qualifying heating windows rather than saturating at 0.5 kW. Existing learning is retained, using nominal compressor capacity as the provisional reference for older records until new windows update it. This remains a proxy response model, not a measured hydraulic or shunt model. Existing temperature targets, forecast horizon and pricing objective are preserved.
+
+Update in Marketplace, restart HA and refresh the dashboard; no helper setup or learning reset is required.
+
 ## Explicit primary/secondary actuator roles — v0.27.1
 
 The C1 target is the primary degree-minute/compressor-control reference. C2's target regulates its ECS mixing valve; it does not directly drive degree minutes. Secondary heat extraction can still lower actual primary supply and therefore affect degree minutes indirectly. This was already the basis of the joint planner; it is now centralised in a named primary-circuit transition shared with the legacy offset model, exposed in diagnostics, and covered by regression tests. The model equation, comfort constraints, C2 room feedback, warm-secondary-only suppression and cloud-write limits are preserved. No new shunt/flow model is claimed. See [hydraulic control roles and verification](docs/hydraulic-control.md).

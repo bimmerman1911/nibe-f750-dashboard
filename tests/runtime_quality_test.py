@@ -29,7 +29,7 @@ class RuntimeQualityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(controller.control['mode'],'Thermostat fallback')
         # A configured minimum is not misrepresented as the fallback thermostat target.
         c1=next(data for _,_,_,data in self.hass.calls if data['entity_id']==engine.C1)
-        self.assertEqual(c1['value'],1)
+        self.assertEqual(c1['value'],4)
         await controller.async_stop()
 
     async def test_no_op_cycle_does_not_block_a_new_necessary_command(self):

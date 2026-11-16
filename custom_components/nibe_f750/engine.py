@@ -1,5 +1,6 @@
 """Control policy. No Home Assistant imports or cloud access."""
 import math
+from .coordination import committed_offset
 
 C1 = 'number.vp_heating_offset_climate_system_1'
 C2 = 'number.vp_heating_offset_climate_system_2'
@@ -40,12 +41,12 @@ def fresh(state, now):
 
 
 def calculate(states, now, hour, persistent_shortfall=False, control=None, options=None):
-    """Return targets and at most three setting requests, or None for missing data."""
+    """Return bounded setting requests; release negative coasting if inputs fail."""
     if not all(fresh(states.get(e), now) and number(states[e].state) is not None for e in REQUIRED_READINGS):
-        return None
+        return release_coast(states,now)
     r1, r2, current1, current2 = (number(states[e].state) for e in REQUIRED_READINGS)
     if not 5 <= r1 <= 35 or not 5 <= r2 <= 35:
-        return None
+        return release_coast(states,now)
     def value(entity):
         state = states.get(entity)
         return number(state.state) if state else None
@@ -57,13 +58,28 @@ def calculate(states, now, hour, persistent_shortfall=False, control=None, optio
         target1 = float(control['target_c'])
     target2 = target1
     e1, e2 = target1-r1, target2-r2
-    next1 = control['offset_c1'] if control is not None and 'offset_c1' in control else current1 + (1 if e1 > .3 else -1 if e1 < -.3 else 0)
+    if control is not None and 'offset_c1' in control:
+        next1=control['offset_c1']
+        transition=control.get('c1_transition',{})
+        next1=committed_offset(next1,current1,transition.get('direction',0),transition.get('time',0),now,
+            min(r1,r2)<control.get('room_min_c',19.) or max(r1,r2)>control.get('room_max_c',20.5))
+    else:
+        error=max(e1,e2)
+        next1=max(0.,current1)+min(4.,max(1.,round(3*error))) if error>.3 else current1-1 if e1<-.3 and e2<-.3 else current1
+    primary=states[C1]
+    lower=number(primary.attributes.get('min'));upper=number(primary.attributes.get('max'))
+    if lower is not None and upper is not None:next1=max(lower,min(upper,next1))
     heating = states.get(PRIORITY) and states[PRIORITY].state == 'Heating'
     water_valid = all(fresh(states.get(e), now) for e in (SUPPLY, REQUIRED, PRIORITY))
     water_valid = water_valid and value(SUPPLY) is not None and value(REQUIRED) is not None
     shortfall = bool(heating and water_valid and value(SUPPLY) < value(REQUIRED)-2)
     secondary_warmer = r2 > r1
-    increase = bool(heating and water_valid and (not shortfall or not secondary_warmer))
+    secondary=states.get('sensor.vp_calculated_supply_climate_system_2')
+    secondary_target=number(secondary.state) if fresh(secondary,now) else None
+    # Freeze upward shunt integration at primary supply saturation. This never
+    # reduces the secondary offset merely because that room is colder.
+    saturated=bool(water_valid and secondary_target is not None and secondary_target>=value(SUPPLY)-1.)
+    increase = bool(heating and water_valid and not saturated and (not shortfall or not secondary_warmer))
     # This adjusts the native shunt target only. Primary production remains C1.
     next2 = current2 + (-1 if e2 < -.3 or (persistent_shortfall and shortfall and secondary_warmer)
                         else 1 if e2 > .3 and increase else 0)
@@ -92,3 +108,14 @@ def restore_dhw(states):
     if state and state.state=='Economy' and 'Normal' in state.attributes.get('options',[]):
         return [(DHW,'Normal')]
     return []
+
+
+def release_coast(states,now):
+    # Release deliberate negative offsets even when a room sensor is lost.
+    # Use the configured native curve (offset zero), never a stale room value.
+    primary=states.get(C1);writes=restore_dhw(states)
+    if fresh(primary,now) and number(primary.state) is not None:
+        lower=number(primary.attributes.get('min'));upper=number(primary.attributes.get('max'))
+        if lower is not None and upper is not None and lower<=0<=upper and float(primary.state)<0:
+            writes.insert(0,(C1,0.))
+    return {'targets':[], 'writes':writes,'shortfall':False,'fallback_release':True}

@@ -122,6 +122,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(hass.calls),first_count)
         hass.time+=843
         await controller.async_tick()
+        self.assertEqual([d['value'] for _,_,_,d in hass.calls if d['entity_id']==engine.C1],[6])
+        hass.time+=2100
+        await controller.async_tick()
         self.assertEqual([d['value'] for _,_,_,d in hass.calls if d['entity_id']==engine.C1],[6,-4])
         for t,*_ in hass.calls:
             self.assertLessEqual(sum(t<=c[0]<t+900 for c in hass.calls),3)

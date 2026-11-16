@@ -30,7 +30,7 @@ class Controller:
         self.last_accounting_save = 0
         self.air_history_task = None
         self.history_task = None
-        self.data = {'enabled': True, 'last_cycle': 0, 'last_attempt': 0, 'release_dhw':False,'dhw_morning_pending':False,'dhw_morning_completed_date':None}
+        self.data = {'enabled': True, 'last_cycle': 0, 'last_attempt': 0, 'c1_direction':0., 'c1_changed':0., 'release_dhw':False,'dhw_morning_pending':False,'dhw_morning_completed_date':None}
         self.status = 'Starting'
         self.targets = []
         self.telemetry = {}
@@ -68,7 +68,7 @@ class Controller:
             if 'release_dhw' not in restored and not self.data['enabled']:
                 self.data['release_dhw'] = True
         # Reject corrupt persistent gates rather than silently resetting a budget.
-        if type(self.data['enabled']) is not bool or type(self.data['release_dhw']) is not bool or any(number(self.data[k]) is None for k in ('last_cycle', 'last_attempt')):
+        if type(self.data['enabled']) is not bool or type(self.data['release_dhw']) is not bool or any(number(self.data[k]) is None for k in ('last_cycle', 'last_attempt','c1_direction','c1_changed')) or self.data['c1_direction'] not in (-1.,0.,1.) or self.data['c1_changed']<0:
             raise ValueError('Invalid persisted controller state')
         self.unsubscribe = async_track_time_interval(self.hass, self.async_tick, timedelta(minutes=1))
         await self.async_tick()
@@ -187,7 +187,7 @@ class Controller:
         await self._observe_morning_completion(states,now)
         if self.predictor:
             try:
-                self.predictor.adaptive_model = {**self.learner.parameters(),'dhw_morning_pending':self.data['dhw_morning_pending'],'dhw_morning_completed':self._morning_completed(now)}
+                self.predictor.adaptive_model = {**self.learner.parameters(),'c1_direction':self.data['c1_direction'],'c1_changed':self.data['c1_changed'],'dhw_morning_pending':self.data['dhw_morning_pending'],'dhw_morning_completed':self._morning_completed(now)}
                 self.predictor.learning = self.learner.diagnostics()
                 self.predictor.offset_response = self.offset_learner.parameters()
                 self.predictor.air_limit = self.offset_learner.air_limit
@@ -255,14 +255,18 @@ class Controller:
             if chosen is None and self.forecast.get('steps'):
                 fallback_reason='The current plan cannot be applied: it is stale, outside its command interval, or required live readings are unavailable.'
             self.control = {**bounds,**(chosen or {'mode':'Thermostat fallback', 'reason':fallback_reason})}
+            if chosen is not None:
+                chosen.update({**bounds,'c1_transition':{'direction':self.data['c1_direction'],'time':self.data['c1_changed']}})
             result = calculate(states, now, dt_util.now().hour,
                 self.short_since is not None and now-self.short_since >= 900, control=chosen,options=options)
             if result is None:
                 result = {'targets':[], 'writes':restore_dhw(states)}
                 self.status = 'Waiting for readings'
             else:
-                self.status = 'Write failed' if self.write_failed else 'Running'
+                self.status = 'Waiting for readings' if not result['targets'] else 'Write failed' if self.write_failed else 'Running'
             self.targets = result['targets']
+            self.control['fallback_release']=result.get('fallback_release',False)
+            self.control['c1_commitment_until']=self.data['c1_changed']+2880. if self.data['c1_direction'] else None
         self.control['command_not_before']=max(now,float(self.data['last_cycle'])+902,float(self.data['last_attempt'])+902)
         self.control['pending_writes']=[{'entity':e,'requested':v} for e,v in result['writes']]
         hold_until=number(self.control.get('hold_until')) or 0.
@@ -310,6 +314,11 @@ class Controller:
                     'set_value' if domain == 'number' else 'select_option',
                     {'entity_id': entity, 'value' if domain == 'number' else 'option': value}, blocking=True)
                 attempts[-1]['success'] = True
+                if entity=='number.vp_heating_offset_climate_system_1':
+                    before=number(states[entity].state)
+                    if before is not None and abs(value-before)>.01:
+                        self.data['c1_direction']=1. if value>before else -1.
+                        self.data['c1_changed']=self.clock()
             except Exception:
                 self.status = 'Write failed'
                 failed = True

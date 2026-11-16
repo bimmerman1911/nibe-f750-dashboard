@@ -17,6 +17,7 @@ from .predictive import DEFAULTS, thermal_step
 from .dhw import policy, charge, next_deadline
 from .timing import improve as improve_timing
 from .work import ReservedBudget
+from .coordination import committed_offset, differential_rate
 
 COMMAND_SECONDS=960.
 # SEK per squared degree-hour inside the uncertainty buffer. Actual configured
@@ -80,6 +81,8 @@ class State:
     violation: float=0.
     room_delta: float=0.
     comfort_risk: float=0.
+    offset_direction: float=0.
+    offset_changed: float=0.
 
 
 def selection_key(result):
@@ -238,6 +241,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                 m.get('dhw_morning_pending',False),sample['offset'],native_mode.state)
     if m.get('dhw_morning_completed'):
         first.completed_day=datetime.fromtimestamp(now,zone).date().isoformat()
+    first.offset_direction=m.get('c1_direction',0.);first.offset_changed=m.get('c1_changed',0.)
     beam=[first];cursor=now;slot_index=0;expanded=0;limited=False
     # Endpoint energy has an economic value, not a fixed 20°C equality/penalty.
     tail_price=max(0.,median([s['price'] for s in slots[-max(1,min(24,len(slots))):]]))
@@ -331,6 +335,8 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                     if old and number(old.get('offset')) is not None and old.get('dhw_mode') in ('Economy','Normal'):
                         offsets=[min(levels,key=lambda v:abs(v-float(old['offset']))) ]
                         modes=['Normal' if reserve['dhw']=='Normal' else old['dhw_mode']]
+            offsets=list(dict.fromkeys(committed_offset(o,previous.offset,previous.offset_direction,previous.offset_changed,cursor,
+                cold_room(previous)<m['room_min_c'] or previous.room+max(rooms[0]-room+previous.room_delta,rooms[1]-room-previous.room_delta)>m['room_max_c']) if not holding else o for o in offsets))
             for offset in offsets:
                 for mode in modes:
                     expanded+=1
@@ -375,7 +381,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                                 a,b,mode_old,kw=activity[-1]
                                 activity[-1]=(a,activity_end,mode_old,(kw*(b-a)+inline*(activity_end-activity_start))/(activity_end-a))
                             else:activity.append((activity_start,activity_end,activity_mode,inline))
-                            rate=rates[0]+(rates[1]-rates[0])*min(1.,q/.5)
+                            rate=differential_rate(room_response,q,m['compressor_heat_kw'])
                             target_delta=2.*rate
                             room_delta=target_delta+(room_delta-target_delta)*math.exp(-h/2.)
                             room1=r+rooms[0]-room+room_delta;room2=r+rooms[1]-room-room_delta
@@ -418,12 +424,12 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                     command={'economic_pause':bool(mode=='Economy' and reserve.get('dhw_economic_pause')), 'start':cursor,'end':stop,'offset':offset,'dhw_mode':mode,
                              'locked':holding,'action':'dhw' if any(q['action']=='dhw' for q in pieces) else 'heat' if any(q['action']=='heat' for q in pieces) else 'off','reason':(reserve['dhw_reason'] if reserve['dhw']=='Normal' else 'Scheduled DHW period') if mode=='Normal' else 'Price and stored-heat optimisation'}
                     candidates.append(State(r,w,supply,heat,stored,dm,running,charging,pending,offset,mode,
-                        cost,penalty,auxiliary_energy,miss,previous,command,pieces,completed_day=completed_day,violation=violation,room_delta=room_delta,comfort_risk=comfort_risk))
+                        cost,penalty,auxiliary_energy,miss,previous,command,pieces,completed_day=completed_day,violation=violation,room_delta=room_delta,comfort_risk=comfort_risk,offset_direction=(1. if offset>previous.offset else -1.) if offset!=previous.offset else previous.offset_direction,offset_changed=cursor if offset!=previous.offset else previous.offset_changed))
         rank=lambda n:(n.violation,n.shortfall+deadline_risk(n),n.cost+terminal(n)+COMFORT_RISK_PRICE*n.comfort_risk,n.aux,n.penalty)
         candidates.sort(key=rank)
         diverse={}
         for n in candidates:
-            key=(round(n.room*10),round(n.water*2),round(n.dm/150),round(n.supply/3),round(n.stored),round(n.heat),n.mode,n.running,n.charging,n.pending,n.offset,round(n.room_delta*20))
+            key=(round(n.room*10),round(n.water*2),round(n.dm/150),round(n.supply/3),round(n.stored),round(n.heat),n.mode,n.running,n.charging,n.pending,n.offset,round(n.room_delta*20),n.offset_direction,n.offset_changed)
             diverse.setdefault(key,n)
         pool=list(diverse.values())
         # Preserve storage and degree-minute frontiers. Running/charging state

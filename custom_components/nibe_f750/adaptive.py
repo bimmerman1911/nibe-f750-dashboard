@@ -35,7 +35,7 @@ class ThermalLearner:
         self.banks = [{'lag': lag, 'theta': [bounded(h/c,.0005,.15), bounded(1/c,.01,.5), 0.],
                        'p': [[.0002, 0., 0.], [0., .04, 0.], [0., 0., .02]],
                        'score': .1, 'heat': 0.} for lag in LAGS]
-        self.room_response = {"heating_rate":0.,"coasting_rate":0.,"heating_hours":0.,"coasting_hours":0.}
+        self.room_response = {"heating_kw":4.2,"heating_rate":0.,"coasting_rate":0.,"heating_hours":0.,"coasting_hours":0.}
         self.heat_timestamp = None
         self.count = 0
         self.heating_windows = 0
@@ -142,7 +142,7 @@ class ThermalLearner:
             self.projection_last_window=data.get('projection_last_window',False)
             response=data.get('room_response',{})
             for k in self.room_response:
-                v=response.get(k,0.)
+                v=response.get(k,4.2 if k=='heating_kw' else 0.)
                 assert isinstance(v,(int,float)) and math.isfinite(v) and (abs(v)<=.3 if k.endswith('rate') else 0<=v<=1e6)
                 self.room_response[k]=v
             timestamp=data.get('heat_timestamp',data.get('last_learning_at'))
@@ -250,6 +250,7 @@ class ThermalLearner:
                 key=mode+'_rate';coverage=mode+'_hours'
                 alpha=1. if self.room_response[coverage]==0 else 1-math.exp(-hours/2)
                 self.room_response[key]+=(rate-self.room_response[key])*alpha
+                if mode=='heating':self.room_response['heating_kw']+=(average_heat-self.room_response['heating_kw'])*alpha
                 self.room_response[coverage]+=hours
             self.heating_windows += int(average_heat>=.5)
             self.cooling_windows += int(average_heat<=.1)
