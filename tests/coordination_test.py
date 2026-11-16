@@ -43,6 +43,11 @@ class CoordinationTests(unittest.TestCase):
         r=engine.calculate({v.entity_id:v for v in h.states.async_all()},h.time,12)
         self.assertGreaterEqual(dict(r['writes'])[engine.C1],0)
 
+    def test_fallback_does_not_heat_through_an_upper_comfort_breach(self):
+        h=Fixture();h.states.values.update({engine.C1:'0',engine.ROOM1:'22',engine.ROOM2:'18.2'})
+        r=engine.calculate({v.entity_id:v for v in h.states.async_all()},h.time,12,options={'room_max_c':21})
+        self.assertEqual(dict(r['writes'])[engine.C1],-1)
+
     def test_planner_honours_persisted_direction_on_its_command_timeline(self):
         s=readings(room=20,tank=52);s[engine.C1].state='6'
         commands=[{'start':NOW,'end':NOW+3600,'offset':-6,'dhw_mode':'Economy'}]

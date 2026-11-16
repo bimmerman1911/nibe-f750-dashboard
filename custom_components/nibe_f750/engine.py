@@ -66,6 +66,9 @@ def calculate(states, now, hour, persistent_shortfall=False, control=None, optio
     else:
         error=max(e1,e2)
         next1=max(0.,current1)+min(4.,max(1.,round(3*error))) if error>.3 else current1-1 if e1<-.3 and e2<-.3 else current1
+    maximum=number((options or {}).get('room_max_c',max(20.5,target1)))
+    if control is None and maximum is not None and max(r1,r2)>maximum:
+        next1=min(next1,current1-1)
     primary=states[C1]
     lower=number(primary.attributes.get('min'));upper=number(primary.attributes.get('max'))
     if lower is not None and upper is not None:next1=max(lower,min(upper,next1))
