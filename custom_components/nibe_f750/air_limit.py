@@ -11,6 +11,16 @@ IDS=(FLOW,INLET,EVAP,HZ,'sensor.vp_priority','sensor.vp_degree_minutes_2',
      'sensor.vp_supply_line_bt61','sensor.vp_calculated_supply_climate_system_1')
 
 
+def airflow(states,now):
+    state=states.get(FLOW)
+    value=number(state.state) if fresh(state,now) else None
+    if value is None:return None
+    unit=str(state.attributes.get('unit_of_measurement','')).lower().replace(' ','')
+    if unit in ('l/s','lps'):value*=3.6
+    elif unit not in ('m³/h','m3/h'):return None
+    return value
+
+
 def sample(states,now):
     def read(e):
         s=states.get(e);return number(s.state) if fresh(s,now) else None
@@ -35,9 +45,9 @@ def sample(states,now):
 
 class AirLimit:
     def __init__(self):
-        self.samples=[];self.observations=[];self.sustained=None;self.revision=0
+        self.samples=[];self.observations=[];self.sustained=None;self.last_airflow=None;self.revision=0
     def dump(self):
-        return {'version':1,'observations':self.observations[:],'sustained':self.sustained}
+        return {'version':1,'observations':self.observations[:],'sustained':self.sustained,'last_airflow':self.last_airflow}
     def restore(self,data):
         try:
             if not data:return False
@@ -52,10 +62,25 @@ class AirLimit:
                 assert isinstance(sustained,dict)
                 assert all(number(sustained.get(k)) is not None for k in ('time','flow','tin','hz'))
                 assert 50<=sustained['flow']<=500 and 6<=sustained['tin']<=40 and 20<=sustained['hz']<=150
+            cached=data.get('last_airflow')
+            if cached is not None:
+                assert isinstance(cached,dict) and number(cached.get('time')) is not None and number(cached.get('flow')) is not None
+                assert cached['time']>=0 and 50<=cached['flow']<=500
+            else:
+                # Upgrade older stores using the latest qualified flow evidence.
+                history=data['observations']+([sustained] if sustained else [])
+                if history:
+                    latest=max(history,key=lambda r:r['time']);cached={'time':latest['time'],'flow':latest['flow']}
+            self.last_airflow=dict(cached) if cached else None
             self.observations=[dict(r) for r in data['observations']];self.sustained=sustained
             return True
         except (KeyError,TypeError,ValueError,AssertionError):return False
     def update(self,states,now):
+        flow=airflow(states,now)
+        if flow is not None and 50<=flow<=500:
+            stamp=states[FLOW].last_reported.timestamp()
+            if self.last_airflow is None or stamp>self.last_airflow['time']:
+                self.last_airflow={'time':stamp,'flow':flow};self.revision+=1
         s=sample(states,now)
         if s is None:self.samples=[];return
         if self.samples and s['reported']<=self.samples[-1]['reported']:return
@@ -81,10 +106,12 @@ class AirLimit:
     def estimate(self,states,now,reported,minimum):
         def value(e):
             s=states.get(e);return number(s.state) if fresh(s,now) else None
-        flow=value(FLOW);tin=value(INLET)
-        unit=states[FLOW].attributes.get('unit_of_measurement','').lower().replace(' ','') if states.get(FLOW) else ''
-        if unit in ('l/s','lps') and flow is not None:flow*=3.6
-        elif unit not in ('m³/h','m3/h'):flow=None
+        flow=airflow(states,now);tin=value(INLET)
+        flow_source='Live airflow';flow_age=0.
+        # A numeric low/zero flow is evidence against the constant-fan assumption.
+        explicit_low=flow is not None and flow<50
+        if flow is None and self.last_airflow and now>=self.last_airflow['time']:
+            flow=self.last_airflow['flow'];flow_source='Last valid airflow';flow_age=now-self.last_airflow['time']
         if states.get(INLET) and states[INLET].attributes.get('unit_of_measurement') not in ('°C','C'):tin=None
         recent=[r for r in self.observations if 0<=now-r['time']<=14*86400]
         usable=flow is not None and tin is not None and 50<=flow<=500 and 6<=tin<=40
@@ -96,16 +123,18 @@ class AirLimit:
             # A sustained speed is evidence of achievable operation, not its
             # maximum. Use it provisionally rather than assuming 120 Hz.
             r=self.sustained
-            if usable and r and 0<=now-r['time']<=86400:
-                cap=min(reported,r['hz']*min(1.,flow/r['flow'])*min(1.,(tin-FLOOR)/(r['tin']-FLOOR)))
+            if not explicit_low and r and 0<=now-r['time']<=14*86400:
+                scale=min(1.,flow/r['flow']) if flow is not None and 50<=flow<=500 else 1.
+                if tin is not None and 6<=tin<=40:scale*=min(1.,(tin-FLOOR)/(r['tin']-FLOOR))
+                cap=min(reported,r['hz']*scale)
                 source='Provisional sustained observation'
             else:
-                hz=value(HZ) or minimum
-                cap=min(reported,max(minimum,hz));source='Provisional current observation'
+                cap=None;source='Awaiting qualified capacity evidence'
         return {'source':source,'calibrated':source=='Calibrated evaporator limit','coefficient':k,
                 'observations':len(recent),'floor_assumption_c':FLOOR,'floor_margin_c':.5,
                 'frequency_margin':.95,'airflow_m3h':flow,'inlet_c':tin,
-                'reported_max_hz':reported,'effective_max_hz':max(0.,cap)}
+                'airflow_source':flow_source if flow is not None else 'Unavailable','airflow_age_seconds':flow_age if flow is not None else None,
+                'reported_max_hz':reported,'effective_max_hz':max(0.,cap) if cap is not None else None}
 
 
 def replay(recorded,start,end):

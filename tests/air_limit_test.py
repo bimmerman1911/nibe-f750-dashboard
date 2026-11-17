@@ -56,7 +56,7 @@ class AirTests(unittest.TestCase):
         m=calibrated();n=air.AirLimit();self.assertTrue(n.restore(copy.deepcopy(m.dump())))
         self.assertTrue(n.estimate(states(NOW+600),NOW+600,120,20)['calibrated'])
         t=NOW+15*86400;r=n.estimate(states(t,hz=40),t,120,20)
-        self.assertFalse(r['calibrated']);self.assertEqual(r['effective_max_hz'],40)
+        self.assertFalse(r['calibrated']);self.assertIsNone(r['effective_max_hz'])
         self.assertFalse(air.AirLimit().restore({'version':1,'observations':[{'k':float('nan')}]}))
 
     def test_volume_unit_conversion_and_sustained_provisional_cap(self):
@@ -66,6 +66,32 @@ class AirTests(unittest.TestCase):
         r=m.estimate(s,NOW+600,120,20)
         self.assertFalse(r['calibrated']);self.assertEqual(r['effective_max_hz'],60)
         self.assertAlmostEqual(r['airflow_m3h'],160)
+
+    def test_unknown_airflow_and_startup_speed_use_persisted_calibration(self):
+        m=calibrated();n=air.AirLimit();self.assertTrue(n.restore(copy.deepcopy(m.dump())))
+        t=NOW+1200;s=states(t,hz=2,flow='unknown')
+        cap=n.estimate(s,t,82,20)
+        self.assertTrue(cap['calibrated']);self.assertGreater(cap['effective_max_hz'],70)
+        self.assertEqual(cap['airflow_source'],'Last valid airflow')
+        self.assertEqual(cap['airflow_m3h'],160)
+        self.assertEqual(cap['airflow_age_seconds'],600)
+        # Unknown airflow must never create new calibration observations.
+        n.update(s,t);self.assertEqual(len(n.observations),1)
+
+    def test_legacy_store_recovers_airflow_and_new_live_value_replaces_it(self):
+        data=calibrated().dump();data.pop('last_airflow')
+        m=air.AirLimit();self.assertTrue(m.restore(data))
+        self.assertEqual(m.last_airflow['flow'],160)
+        m.update(states(NOW+1200,flow=140,mode='Off',hz=0),NOW+1200)
+        self.assertEqual(m.last_airflow['flow'],140)
+        self.assertFalse(air.AirLimit().restore({**data,'last_airflow':{'flow':float('nan'),'time':NOW}}))
+
+    def test_no_capacity_is_inferred_from_startup_or_missing_history(self):
+        for hz in (0,2,20,80):
+            m=air.AirLimit();r=m.estimate(states(NOW,flow='unknown',hz=hz),NOW,82,20)
+            self.assertIsNone(r['effective_max_hz'])
+        m=calibrated();r=m.estimate(states(NOW+600,flow=0,hz=2),NOW+600,82,20)
+        self.assertIsNone(r['effective_max_hz'])
 
     def test_frequency_cap_reduces_available_heat_without_renormalising_it(self):
         s=readings(room=19.,tank=45.);s['sensor.vp_max_compressor_frequency'].state='120'
@@ -82,5 +108,15 @@ class AirTests(unittest.TestCase):
         self.assertEqual(len(data['observations']),2)
         empty=air.replay({e:[rows[0]] for e,rows in recorded.items()},NOW,NOW+1200)
         self.assertEqual(empty['observations'],[])
+
+class CapacitySourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_capacity_clears_forecast_instead_of_inventing_twenty_hz(self):
+        from predictive_test import SourceTests
+        from _nibe_test.forecast import Predictor
+        hass,readings,_=SourceTests().make()
+        p=Predictor(hass,{'weather_entity':'weather.home'});p.air_limit=air.AirLimit()
+        result=await p.async_update(readings,readings['sensor.ovanvaning_temperature'].last_reported.timestamp())
+        self.assertEqual(result['steps'],[])
+        self.assertIn('Qualified compressor capacity unavailable',result['message'])
 
 if __name__=='__main__':unittest.main()

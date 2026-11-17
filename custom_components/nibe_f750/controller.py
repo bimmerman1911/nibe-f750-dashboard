@@ -72,7 +72,7 @@ class Controller:
             raise ValueError('Invalid persisted controller state')
         self.unsubscribe = async_track_time_interval(self.hass, self.async_tick, timedelta(minutes=1))
         await self.async_tick()
-        if (not self.offset_learner.air_limit.observations and 'recorder' in getattr(getattr(self.hass,'config',None),'components',set()) and hasattr(self.hass,'async_create_background_task')):
+        if ((not self.offset_learner.air_limit.observations or not self.offset_learner.air_limit.last_airflow) and 'recorder' in getattr(getattr(self.hass,'config',None),'components',set()) and hasattr(self.hass,'async_create_background_task')):
             self.air_history_task=self.hass.async_create_background_task(self.async_backfill_air_limit(),'NIBE evaporator calibration history')
         if (not self.accounting.history_checked and 'recorder' in getattr(getattr(self.hass,'config',None),'components',set())
             and hasattr(self.hass,'async_create_background_task')):
@@ -91,6 +91,7 @@ class Controller:
                 unique={int(r['time']//600):r for r in restored.observations+live.observations}
                 live.observations=sorted(unique.values(),key=lambda r:r['time'])[-9:]
                 if restored.sustained and 0<=self.clock()-restored.sustained['time']<=86400 and (not live.sustained or self.clock()-live.sustained['time']>86400 or restored.sustained['hz']>live.sustained['hz']):live.sustained=restored.sustained
+                if restored.last_airflow and (not live.last_airflow or restored.last_airflow['time']>live.last_airflow['time']):live.last_airflow=restored.last_airflow
                 await self.offset_store.async_save(self.offset_learner.dump())
                 if self.predictor:self.predictor.last_refresh=None
                 self.notify()

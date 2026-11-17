@@ -23,6 +23,16 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Persistent airflow for capacity forecasts — v0.28.1
+
+The capacity estimator now remembers the latest valid, unit-checked reference airflow across restarts and uses it when that sensor is unknown or stale. This follows the installation's continuously running, largely constant ventilation assumption. Diagnostics identify live versus retained airflow and its age. A valid new airflow value replaces it immediately; an explicit numeric low/zero flow is not overridden by the cache.
+
+Existing installations initialise this cache from their most recent qualified airflow observation, without resetting learning. Initial Recorder backfill also retains independently observed airflow when available. Missing airflow never qualifies new evaporator calibration windows, and retained data is not presented as a fresh measurement. The existing fourteen-day capacity-evidence window remains in force.
+
+Startup/current compressor frequency is no longer used as an estimate of maximum capacity. The estimator uses the calibrated relationship with retained airflow, then qualified sustained-operation evidence where available. With no qualified capacity evidence, active thermostat control continues while evidence accumulates rather than publishing an invented minimum-speed maximum. No fan, compressor-speed or protection setting is written.
+
+Update in Marketplace and restart HA; no new helpers, setup or learning reset is needed.
+
 ## Coordinated production and recovery — v0.28.0
 
 C1 remains the primary production/degree-minute actuator. The planner and live dispatch now share a 48-minute direction commitment: a large initial move is allowed, but ordinary reversals wait three command periods. A measured or simulated room-limit breach can override this hold. Direction and change time persist across restarts; existing rolling cloud-write limits still apply, including emergencies. Forecasts simulate this commitment rather than applying an unexplained output slew limit afterward.

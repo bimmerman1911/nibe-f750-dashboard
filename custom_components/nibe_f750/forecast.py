@@ -120,6 +120,7 @@ class Predictor:
             if self.air_limit is not None:
                 model['air_limit']=self.air_limit.estimate(states,now,max_hz,min_hz)
                 max_hz=model['air_limit']['effective_max_hz']
+                if max_hz is None:raise ValueError('Qualified compressor capacity unavailable; collecting operating history')
                 if max_hz<min_hz:raise ValueError('Estimated evaporator capacity is below the native minimum speed')
             # Pure model evaluation stays off HA's event loop.
             budget=PlanningBudget()

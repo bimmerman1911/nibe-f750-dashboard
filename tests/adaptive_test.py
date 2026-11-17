@@ -186,6 +186,9 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         from _nibe_test.forecast import Predictor
         predictor=Predictor(hass,{'weather_entity':'weather.home'})
         controller=runtime.Controller(hass,clock=lambda:hass.time,predictor=predictor)
+        # This scenario tests a trained controller: qualified capacity evidence
+        # is required too; a current/startup frequency is not a maximum.
+        controller.offset_learner.air_limit.sustained={'time':BASE-600,'hz':84.,'flow':160.,'tin':20.}
         controller.learner.selected=0
         controller.learner.banks[0]['theta']=[.012,.08,.02]
         controller.learner.count=10
