@@ -93,7 +93,7 @@ class AirLimit:
         stable=span('hz')<=5 and span('flow')<=min(r['flow'] for r in rows)*.05 and span('tin')<=1.
         if not stable:return
         flow=median(r['flow'] for r in rows);tin=median(r['tin'] for r in rows);hz=median(r['hz'] for r in rows)
-        if self.sustained is None or now-self.sustained['time']>86400 or hz>self.sustained['hz']:
+        if all(r['demand'] for r in rows) and (self.sustained is None or now-self.sustained['time']>86400 or hz>self.sustained['hz']):
             self.sustained={'time':now,'flow':flow,'tin':tin,'hz':hz};self.revision+=1
         # A plateau alone is not proof of evaporator limitation. Demand must
         # remain unsatisfied, and the coil must stay close to the assumed floor.

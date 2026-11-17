@@ -93,6 +93,12 @@ class AirTests(unittest.TestCase):
         m=calibrated();r=m.estimate(states(NOW+600,flow=0,hz=2),NOW+600,82,20)
         self.assertIsNone(r['effective_max_hz'])
 
+    def test_low_demand_plateau_is_not_capacity_evidence(self):
+        m=air.AirLimit()
+        for i in range(11):m.update(states(NOW+i*60,hz=20,dm=-20,evap=-5),NOW+i*60)
+        self.assertIsNone(m.sustained)
+        self.assertIsNone(m.estimate(states(NOW+600),NOW+600,82,20)['effective_max_hz'])
+
     def test_frequency_cap_reduces_available_heat_without_renormalising_it(self):
         s=readings(room=19.,tank=45.);s['sensor.vp_max_compressor_frequency'].state='120'
         r=joint.plan(timeline(count=8),s,NOW,{**MODEL,'frequency_reference_hz':120.,'dhw_fraction':.9},max_hz=80)
