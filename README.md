@@ -23,6 +23,14 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Indoor temperature history and plan — v0.29.0
+
+The Smart Control card replaces the weekly electricity-cost table with an interactive indoor-temperature chart. C1/upstairs and C2/downstairs share one Celsius axis and a default 24-hour window: the previous 12 hours of recorded temperature and the next 12 hours of the active plan's separate room predictions. A Now marker separates solid recorded lines from dashed predictions. Zoom, pan, inspection, series visibility and point-label controls are available.
+
+History is read from HA Recorder for the existing upstairs/downstairs sensors and automatically refreshed at most every five minutes while the card is open; it does not poll NIBE. Unavailable recorded values break the line. Missing history remains blank, and stale/inactive plans do not show future predictions. No additional sensors or helpers are required. The accounting backend is retained for the existing power-history chart; controller behavior is unchanged.
+
+Update in Marketplace, restart HA and refresh the dashboard.
+
 ## Persistent airflow for capacity forecasts — v0.28.1
 
 The capacity estimator now remembers the latest valid, unit-checked reference airflow across restarts and uses it when that sensor is unknown or stale. This follows the installation's continuously running, largely constant ventilation assumption. Diagnostics identify live versus retained airflow and its age. A valid new airflow value replaces it immediately; an explicit numeric low/zero flow is not overridden by the cache.

@@ -12,7 +12,7 @@ try {
   assert.equal(await page.evaluate(()=>performance.getEntriesByType('resource').some(r=>r.name.endsWith('/dist/nibe-f750-smart-card.js'))),false);
   assert.equal(await card.getByText('Plan limits',{exact:true}).count(),0);
   assert.equal(await card.getByText('Sources & assumptions',{exact:true}).count(),0);
-  assert.equal(await card.getByRole('img').count(),2);
+  assert.equal(await card.getByRole('img').count(),3);
   assert.match(await card.locator('.badge').textContent(),/Demo.*preview/);
   assert.equal(await card.getByRole('button',{name:'Refresh',exact:true}).count(),1);
   assert.equal(await card.evaluate(c=>c._plan.auxiliary_kwh),0);
@@ -103,7 +103,7 @@ try {
   assert.equal(await card.getByText('Set up live trial control',{exact:true}).count(),0);
   assert.equal(await card.evaluate(c=>c._plan.steps.length),0);
   assert.equal(await card.getByText(/Demand limited by C1|C2 demand/i).count(),0);
-  assert.equal(await card.getByRole('img').count(),2);
+  assert.equal(await card.getByRole('img').count(),3);
   assert.equal(await card.evaluate(c=>c._weather),'weather.smhi_home');
   assert.equal(await card.evaluate(c=>c._price),'sensor.nordpool_kwh_se3_sek_3_10_025');
   assert.ok(await page.evaluate(()=>window.smartCalls.filter(r=>r.type==='call_service').every(r=>r.domain==='weather')));
@@ -115,7 +115,7 @@ try {
   await card.getByText('Forecast connection lost',{exact:true}).waitFor();
   assert.equal(await card.evaluate(c=>c._plan),null);
   // The independent price/history chart remains available during weather failure.
-  assert.equal(await card.getByRole('img').count(),1);
+  assert.equal(await card.getByRole('img').count(),2);
   assert.deepEqual(await card.locator('.zone strong').allTextContents(),['20.1 °C','20.1 °C']);
   await page.evaluate(()=>{
     const c=document.querySelector('nibe-f750-smart-card');
@@ -170,10 +170,38 @@ try {
     Object.assign(window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast,{generated_at:now,horizon_end:now+86400,planner:'joint',model:{room_min_c:18,room_target_c:20,room_max_c:20.5},steps:[{start:now,end:now+900,compressor_kw:1,inline_kw:0,price:1,outdoor:5,action:'heat',dhw_mode:'Normal',offset:4,room:20,water:49},{start:now+70*900-43200,end:now+71*900-43200,compressor_kw:1,inline_kw:2,price:1,outdoor:5,action:'dhw',dhw_mode:'Normal',room:20,water:49}]});
     const c=document.querySelector('nibe-f750-smart-card');c._error='';c.hass=window.smartHass;
   });
-  assert.equal(await card.locator('.weekly-costs tbody tr').count(),7);
-  assert.equal(await card.locator('.weekly-costs tr[data-date="2026-11-05"] td').nth(1).textContent(),'');
-  assert.equal(await card.locator('.weekly-costs tr[data-date="2026-11-05"] td').nth(0).textContent(),'Thu');
-  assert.equal(await card.locator('.weekly-costs tr[data-date="2026-11-04"] td').nth(1).textContent(),'8 SEK');
+  assert.equal(await card.locator('.weekly-costs').count(),0);
+  await page.evaluate(async()=>{
+    const c=document.querySelector('nibe-f750-smart-card'),now=Date.now();
+    window.smartHass.callApi=async(method,path)=>{
+      if(method!=='GET'||!path.includes('history/period/')||!path.includes('sensor.ovanvaning_temperature,sensor.nedervaning_temperature'))throw Error('Unexpected history request');
+      return ['sensor.ovanvaning_temperature','sensor.nedervaning_temperature'].map((id,i)=>[
+        {entity_id:id,state:String(19+i*.2),attributes:{unit_of_measurement:'°C'},last_updated:new Date(now-43200000).toISOString()},
+        {state:'unknown',last_changed:new Date(now-7200000).toISOString()},
+        {state:String(19.5+i*.2),last_changed:new Date(now-3600000).toISOString()}
+      ]);
+    };
+    c._indoorFetched=0;await c.refreshIndoorHistory(true);
+    const p=window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast;
+    p.steps.forEach((s,i)=>Object.assign(s,{room1:20.1+i*.3,room2:19.3+i*.3}));c.render();
+  });
+  const indoor=card.locator('[data-chart="indoor"]');
+  assert.equal(await indoor.locator('[data-temperature="observed"]').count(),2);
+  assert.equal(await indoor.locator('[data-temperature="predicted"]').count(),2);
+  assert.ok(await indoor.locator('path').evaluateAll(paths=>paths.every(p=>p.getAttribute('d').length>0)));
+  assert.ok(await indoor.locator('[data-temperature="observed"]').first().evaluate(p=>(p.getAttribute('d').match(/M/g)||[]).length>=2));
+  assert.deepEqual(await card.evaluate(c=>c._chartData.indoor.start-Date.now()),-43200000);
+  assert.deepEqual(await card.evaluate(c=>c._chartData.indoor.end-Date.now()),43200000);
+  await indoor.locator('[data-nav="in"]').click();
+  assert.equal(await indoor.locator('.chart-span').textContent(),'12 h');
+  await indoor.locator('.chart-options summary').click();
+  await indoor.locator('[data-option="c2"]').uncheck();
+  assert.ok(await indoor.locator('[data-series="c2"]').evaluateAll(paths=>paths.every(p=>p.style.display==='none')));
+  await indoor.locator('[data-option="c2"]').check();
+  await indoor.locator('[data-nav="reset"]').click();
+  await page.evaluate(()=>{const c=document.querySelector('nibe-f750-smart-card'),f=window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast;const t=f.generated_at;f.generated_at-=3600;c.render();window.restoreIndoorTime=t;});
+  assert.ok(await indoor.locator('[data-temperature="predicted"]').evaluateAll(paths=>paths.every(p=>!p.getAttribute('d'))));
+  await page.evaluate(()=>{window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast.generated_at=window.restoreIndoorTime;document.querySelector('nibe-f750-smart-card').render();});
   assert.equal(await card.locator('[data-series="actual"]').count(),1);
   assert.equal(await card.locator('[data-series="predicted"]').count(),1);
   await page.evaluate(()=>{
@@ -241,6 +269,12 @@ try {
   await page.evaluate(()=>{window.smartHass.states['switch.nibe_smart_control'].state='off';document.querySelector('nibe-f750-smart-card').hass=window.smartHass;});
   assert.equal(await card.locator('[data-activity="dhw"]').count(),0);
   await page.evaluate(()=>{window.smartHass.states['switch.nibe_smart_control'].state='on';document.querySelector('nibe-f750-smart-card').hass=window.smartHass;});
+  await page.evaluate(()=>{
+    const c=document.querySelector('nibe-f750-smart-card'),f=window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast,now=Date.now()/1000;
+    f.generated_at=now;
+    f.steps=Array.from({length:48},(_,i)=>({start:now+i*900,end:now+(i+1)*900,price:.8+.5*Math.sin((i+48)/8),outdoor:5+i*.02,room:20,water:49,action:i%24<12?'heat':'off',compressor_kw:i%24<12?1.3:0,inline_kw:0,room1:20.1+.25*Math.sin(i/10),room2:19.8+.18*Math.sin(i/12)}));
+    c.render();
+  });
   await page.screenshot({path:'docs/electricity-mobile.png',fullPage:true});
   await page.setViewportSize({width:1280,height:1200});
   await page.screenshot({path:'docs/electricity-desktop.png',fullPage:true});
