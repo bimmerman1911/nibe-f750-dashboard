@@ -5,7 +5,7 @@ owned by NIBE; simulation never writes degree minutes or compressor frequency.
 """
 import math
 from statistics import median
-from .engine import C1, REQUIRED, SUPPLY, PRIORITY, fresh, number
+from .engine import C1, REQUIRED, SUPPLY, PRIORITY, fresh, number, offset_levels
 from .adaptive import bounded, filtered_heat
 from .predictive import thermal_step
 from .dhw import policy, charge
@@ -165,19 +165,6 @@ def inputs(states,now,capacity):
     return {'time':now,'measurement_time':min(states[e].last_reported.timestamp() for e in (SUPPLY,'sensor.vp_current_compressor_frequency','sensor.vp_max_compressor_frequency')),'offset':offset,'required':required,'supply':supply,'dm':dm,
             'heat':capacity*min(1,hz/maximum)+inline if mode.state=='Heating' else 0.,
             'outside':outside,'mode':mode.state,'compressor_on':hz>0,'fraction':min(1,hz/maximum),'inline':inline}
-
-
-def offset_levels(control):
-    """All values on the native entity's min/step grid, not a slew limit."""
-    lower,upper=(number(control.attributes.get(k)) for k in ('min','max'))
-    step=number(control.attributes.get('step',1.))
-    if lower is None or upper is None or step is None or step<=0 or lower>upper:
-        return []
-    count=math.floor((upper-lower)/step+1e-8)+1
-    # Invalid metadata must not allocate an unbounded search space.
-    if count>2048:
-        return []
-    return [round(lower+i*step,10) for i in range(count)]
 
 
 def plan_offsets(result,states,now,response,min_hz,max_hz,budget=None):

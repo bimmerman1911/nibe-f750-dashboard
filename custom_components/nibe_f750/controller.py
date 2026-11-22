@@ -259,13 +259,22 @@ class Controller:
             if chosen is not None:
                 chosen.update({**bounds,'c1_transition':{'direction':self.data['c1_direction'],'time':self.data['c1_changed']}})
             result = calculate(states, now, dt_util.now().hour,
-                self.short_since is not None and now-self.short_since >= 900, control=chosen,options=options)
+                self.short_since is not None and now-self.short_since >= 900, control=chosen,options=options,
+                response=self.offset_learner.parameters(), compressor_heat_kw=self.learner.prior['compressor_heat_kw'])
             if result is None:
                 result = {'targets':[], 'writes':restore_dhw(states)}
                 self.status = 'Waiting for readings'
             else:
                 self.status = 'Waiting for readings' if not result['targets'] else 'Write failed' if self.write_failed else 'Running'
             self.targets = result['targets']
+            balance = result.get('capacity_balance')
+            if balance and not self.control.get('locked'):
+                self.control['capacity_balance'] = balance
+                self.control['offset_c1'] = balance['offset']
+                self.control['reason'] = 'Matching the primary target to available heat while downstairs recovers'
+            elif chosen and chosen.get('confirm_capacity_balance'):
+                self.control['offset_c1'] = result.get('offset_c1')
+                self.control['reason'] = 'Rechecking the primary supply and compressor before balancing'
             self.control['fallback_release']=result.get('fallback_release',False)
             self.control['c1_commitment_until']=self.data['c1_changed']+2880. if self.data['c1_direction'] else None
         self.control['command_not_before']=max(now,float(self.data['last_cycle'])+902,float(self.data['last_attempt'])+902)

@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 import math
 from statistics import median
 from time import monotonic
-from .engine import ROOM1, ROOM2, C1, C2, SUPPLY, REQUIRED, DHW, fresh, number
-from .offset import inputs, offset_levels
+from .engine import ROOM1, ROOM2, C1, C2, SUPPLY, REQUIRED, DHW, fresh, number, capacity_balance, offset_levels
+from .offset import inputs
 from .native import response_step, emitter_estimate, attainable_supply, primary_degree_minutes_step
 from .adaptive import filtered_heat
 from .predictive import DEFAULTS, thermal_step
@@ -236,6 +236,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
     earliest=max(now,command_not_before or now)
     # A future gate is observed on the next minute tick; plan conservatively.
     if earliest>now+1:earliest=min(end,now+math.ceil((earliest-now)/60.)*60.)
+    balance = capacity_balance(states, now, m['room_min_c'], m['room_max_c'], response, m['compressor_heat_kw'])
     first=State(room,water,sample['supply'],sample['heat'],m.get('initial_heat_kw',sample['heat']),
                 sample['dm'],sample['compressor_on'],sample['mode']=='Hot water' and sample['compressor_on'],
                 m.get('dhw_morning_pending',False),sample['offset'],native_mode.state)
@@ -335,8 +336,14 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                     if old and number(old.get('offset')) is not None and old.get('dhw_mode') in ('Economy','Normal'):
                         offsets=[min(levels,key=lambda v:abs(v-float(old['offset']))) ]
                         modes=['Normal' if reserve['dhw']=='Normal' else old['dhw_mode']]
-            offsets=list(dict.fromkeys(committed_offset(o,previous.offset,previous.offset_direction,previous.offset_changed,cursor,
-                cold_room(previous)<m['room_min_c'] or previous.room+max(rooms[0]-room+previous.room_delta,rooms[1]-room-previous.room_delta)>m['room_max_c']) if not holding else o for o in offsets))
+            balancing = bool(balance and cursor == earliest and not holding)
+            if balancing:
+                # Only the first writable interval has measured shunt and
+                # saturation evidence. Future cycles recheck it before writing.
+                offsets = [balance['offset']]
+            else:
+                offsets=list(dict.fromkeys(committed_offset(o,previous.offset,previous.offset_direction,previous.offset_changed,cursor,
+                    cold_room(previous)<m['room_min_c'] or previous.room+max(rooms[0]-room+previous.room_delta,rooms[1]-room-previous.room_delta)>m['room_max_c']) if not holding else o for o in offsets))
             for offset in offsets:
                 for mode in modes:
                     expanded+=1
@@ -423,6 +430,8 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                         penalty+=.015*abs(offset-previous.offset)+(.025 if mode!=previous.mode else 0)
                     command={'economic_pause':bool(mode=='Economy' and reserve.get('dhw_economic_pause')), 'start':cursor,'end':stop,'offset':offset,'dhw_mode':mode,
                              'locked':holding,'action':'dhw' if any(q['action']=='dhw' for q in pieces) else 'heat' if any(q['action']=='heat' for q in pieces) else 'off','reason':(reserve['dhw_reason'] if reserve['dhw']=='Normal' else 'Scheduled DHW period') if mode=='Normal' else 'Price and stored-heat optimisation'}
+                    if balancing:
+                        command['capacity_balance'] = True
                     candidates.append(State(r,w,supply,heat,stored,dm,running,charging,pending,offset,mode,
                         cost,penalty,auxiliary_energy,miss,previous,command,pieces,completed_day=completed_day,violation=violation,room_delta=room_delta,comfort_risk=comfort_risk,offset_direction=(1. if offset>previous.offset else -1.) if offset!=previous.offset else previous.offset_direction,offset_changed=cursor if offset!=previous.offset else previous.offset_changed))
         rank=lambda n:(n.violation,n.shortfall+deadline_risk(n),n.cost+terminal(n)+COMFORT_RISK_PRICE*n.comfort_risk,n.aux,n.penalty)
@@ -474,6 +483,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
         'dhw_deadline_shortfall_c':best.shortfall,'emitter':calibration,
         'planning':{'defer_until':strategy.until if isinstance(strategy,DeferHeat) else None,'strategy':'beam' if strategy is None else ('defer-bridge' if strategy.bridge else 'defer')+' until '+str(int(strategy.until)) if isinstance(strategy,DeferHeat) else 'price-aware '+str(strategy),'expanded':expanded,'command_period_seconds':COMMAND_SECONDS,'command_not_before':earliest,
             'initial_state':{**sample,'rooms':rooms,'water':water,'dhw_mode':native_mode.state,'offset_grid':levels},
+            'capacity_balance':balance,
             'actuator_roles':{'degree_minutes':{'offset':C1,'target':REQUIRED,'supply':SUPPLY},
                 'secondary':{'offset':C2,'target':'sensor.vp_calculated_supply_climate_system_2','role':'mixing-valve target; indirect load on primary circuit'}},
             'search_limited':limited,'comfort_margin_c':uncertainty,'known_hours':(end-now)/3600,'frequency_limit':m.get('air_limit'),'available_compressor_heat_kw':cap,'frequency_reference_hz':reference_hz,'short_horizon':end-now<21600,

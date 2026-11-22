@@ -1,6 +1,5 @@
 """Translate the current planned interval into native, bounded control targets."""
-from .engine import C1, ROOM1, ROOM2, fresh, number
-from .offset import offset_levels
+from .engine import C1, ROOM1, ROOM2, fresh, number, offset_levels
 from .dhw import policy
 
 
@@ -54,4 +53,5 @@ def request(forecast, states, now, model):
     if decision['dhw']=='Normal':
         reason=decision['dhw_reason']
     return {'offset_c1':offset,'target_c':round(desired,2),**decision,'action':current['action'],
-            'reason':reason,'mode':'Adaptive','generated_at':now}
+            'reason':reason,'mode':'Adaptive','generated_at':now,
+            'confirm_capacity_balance':bool(current.get('capacity_balance'))}
