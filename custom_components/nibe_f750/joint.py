@@ -357,18 +357,19 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                         dt=(chunk['end']-chunk['start'])/3600
                         n=max(1,math.ceil(dt*12));h=dt/n
                         energy=extra_energy=0.;water_minutes=0.;min_room=r;activity=[]
+                        allowed_aux = aux_limit if chunk.get('inline_allowed', True) else 0.
                         required=max(15.,min(60.,sample['required']+gain*(offset-sample['offset'])
                                             -1.2*(chunk['outdoor']-sample['outside'])))
                         for k in range(n):
                             draw=profile[chunk['local_hour']]
-                            observed_aux=min(aux_limit,sample['inline']) if sample['mode']=='Hot water' else 0.
+                            observed_aux=min(allowed_aux,sample['inline']) if sample['mode']=='Hot water' else 0.
                             qw,fraction,water_aux,charging=charge(w,mode!='Economy',charging,h,m,observed_aux,draw)
                             dhw=fraction>0
-                            heat=response_step(heat,required-supply,dm,h,theta,cap+aux_limit)
+                            heat=response_step(heat,required-supply,dm,h,theta,cap+allowed_aux)
                             if dm>=0:running=False
                             elif dm<=response.get('start_dm',-60):running=True
                             compressor=0. if dhw or not running else max(cap*min_hz/max_hz,min(cap,heat))
-                            extra=0. if dhw or dm>response.get('aux_dm',-700) else min(aux_limit,max(0,heat-cap))
+                            extra=0. if dhw or dm>response.get('aux_dm',-700) else min(allowed_aux,max(0,heat-cap))
                             q=compressor+extra
                             if not dhw:dm=primary_degree_minutes_step(dm,supply,required,h)
                             equilibrium=r+q/conductance

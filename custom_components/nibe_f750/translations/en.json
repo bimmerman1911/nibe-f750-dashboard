@@ -35,7 +35,12 @@
           "room_max_c": "Maximum preheat target (\u00b0C)",
           "tank_min_c": "Model hot-water reserve (\u00b0C)",
           "tank_target_c": "Model hot-water target (\u00b0C)",
-          "tank_max_c": "Model tank ceiling (\u00b0C)"
+          "tank_max_c": "Model tank ceiling (\u00b0C)",
+          "inline_notify_service": "Phone for inline-heater approvals",
+          "inline_max_kw": "Maximum approved inline power (kW)"
+        },
+        "data_description": {
+          "inline_notify_service": "Choosing a phone lets Smart Control return the heater cap to 0 kW outside approved windows. Enable additional heat in the F750\u2019s native settings if you want the pump to use an approved cap. Leave Off for native control."
         }
       }
     },

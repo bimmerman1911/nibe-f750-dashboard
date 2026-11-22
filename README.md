@@ -23,6 +23,14 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Phone approval for inline heat — v0.30.0
+
+In NIBE F750 Smart Control’s integration settings, select **Phone for inline-heater approvals** and leave **Maximum approved inline power** at 6.5 kW for the full available cap. The Home Assistant Companion App supplies the phone notification service. Select **Off** to leave the cap under native/manual control. For managed windows, allow additional heat in the F750's native operating settings and leave its normal power cap at 0 kW. An independent native block can still prevent the heater running.
+
+Smart Control first plans with the compressor alone. It considers a phone request if the plan predicts a room or tank at least 0.1°C below its minimum, or at least 0.5°C short of the 06:00 charge target. It compares a bounded set of low-price windows against the compressor-only plan. It offers one useful window at a time and replans before any additional request. A reply of **Approve this window** permits only that window. **Decline**, no reply or a reply at or after the start leaves the cap at 0 kW.
+
+Windows start on a price-quarter boundary and are modeled over 16 minutes. The existing 902-second write separation and one-minute polling can shift the actual start and restoration. The approved value is a power cap. NIBE determines heater staging and demand. The controller restores 0 kW at the first permitted end-of-window write and waits for the reported value to confirm it. A Home Assistant or myUplink outage can delay restoration, including after an approved run. At restart the integration gives closing the cap priority if a previous write might have left it open.
+
 ## Indoor temperature history and plan — v0.29.0
 
 The Smart Control card replaces the weekly electricity-cost table with an interactive indoor-temperature chart. C1/upstairs and C2/downstairs share one Celsius axis and a default 24-hour window: the previous 12 hours of recorded temperature and the next 12 hours of the active plan's separate room predictions. A Now marker separates solid recorded lines from dashed predictions. Zoom, pan, inspection, series visibility and point-label controls are available.

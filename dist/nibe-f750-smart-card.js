@@ -252,7 +252,10 @@ if(globalThis.customElements&&!customElements.get('nibe-f750-smart-card')) {
       const offset=actual!==null?`Offset ${round(actual)}${selected!==null&&selected!==actual?` → ${round(selected)}`:''}`:selected!==null?`Selected offset ${round(selected)}`:'';
       const next=due!==null&&due>now?`Next permitted update ${clock(due*1000,tz)}`:'';
       const dhw=actualDhw&&['Normal','Economy','Lux'].includes(actualDhw)?`DHW ${actualDhw}${requested&&requested!==actualDhw?` → ${requested}`:''} · ${actualDhw==='Economy'?'charging deferred':this.planIsActive(prediction)&&slot?.action==='dhw'?'charging predicted':'charging permitted'}`:requested?`DHW ${requested} requested`:'';
-      return `${comfort?`<p data-comfort>${escapeHTML(comfort)}</p>`:''}${offset||next?`<p data-offset>${escapeHTML([offset,next].filter(Boolean).join(' · '))}</p>`:''}${dhw?`<p data-dhw>${escapeHTML(dhw)}</p>`:''}`;
+      const approval=control?.inline_approval;
+      const inline=approval?.state&&approval.state!=='Off'
+        ? [approval.state,approval.start!=null?clock(approval.start*1000,tz):''].filter(Boolean).join(' · ') : '';
+      return `${comfort?`<p data-comfort>${escapeHTML(comfort)}</p>`:''}${offset||next?`<p data-offset>${escapeHTML([offset,next].filter(Boolean).join(' · '))}</p>`:''}${dhw?`<p data-dhw>${escapeHTML(dhw)}</p>`:''}${inline?`<p data-inline-approval>Inline heat · ${escapeHTML(inline)}</p>`:''}`;
     }
     chartState(kind){if(!this._charts||typeof this._charts!=='object')this._charts={};if(!this._charts[kind]||typeof this._charts[kind]!=='object')this._charts[kind]={};return this._charts[kind];}
     chartBounds(kind,start,end){

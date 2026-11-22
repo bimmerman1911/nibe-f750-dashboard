@@ -28,6 +28,13 @@ class OptionsFlow(config_entries.OptionsFlow):
         self._entry = entry
 
     async def async_step_init(self, user_input=None):
+        phones = {'': 'Off'}
+        phones.update({name: name.removeprefix('mobile_app_').replace('_', ' ').title()
+                       for name in self.hass.services.async_services().get('notify', {})
+                       if name.startswith('mobile_app_')})
+        saved_phone = self._entry.options.get('inline_notify_service', '')
+        if saved_phone not in phones:
+            phones[saved_phone] = saved_phone + ' (unavailable)'
         if user_input is not None:
             from .predictive import DEFAULTS
             values={**DEFAULTS, **user_input}
@@ -36,6 +43,9 @@ class OptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title='', data=user_input)
         from .predictive import DEFAULTS
         fields={vol.Optional('weather_entity', default=self._entry.options.get('weather_entity','')): str}
+        fields[vol.Optional('inline_notify_service', default=saved_phone)] = vol.In(phones)
+        fields[vol.Optional('inline_max_kw', default=self._entry.options.get('inline_max_kw', 6.5))] = vol.In(
+            [n / 2 for n in range(1, 14)])
         limits={'heat_loss_kw_per_k':(.01,1), 'thermal_capacity_kwh_per_k':(2,100),
                 'compressor_heat_kw':(1,10),'dhw_heat_kw':(1,10),
                 'room_min_c':(16,23),'room_target_c':(17,24),'room_max_c':(18,25),

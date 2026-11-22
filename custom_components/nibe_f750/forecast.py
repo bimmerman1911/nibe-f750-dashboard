@@ -3,9 +3,10 @@ from datetime import datetime, timedelta, timezone
 from homeassistant.util import dt as dt_util
 from .engine import ROOM1, ROOM2, number, fresh, PRICE
 from .predictive import prices, timeline, DEFAULTS
-from .joint import plan as joint_plan
+from .joint import plan as joint_plan, _search as replay_plan
+from .inline import compare_windows, supports_window, CAP_ENTITY, STATUS_ENTITY
 from .dhw import next_deadline
-from .work import PlanningBudget
+from .work import PlanningBudget, ReservedBudget
 from zoneinfo import ZoneInfo
 
 
@@ -20,6 +21,8 @@ class Predictor:
         self.offset_response={}
         self.air_limit=None
         self.command_not_before=0.
+        self.inline_offer=None
+        self.inline_closed_until=0.
         self.result={'status':'Waiting for forecast','message':'Loading prices and hourly weather.', 'steps':[]}
 
     async def async_update(self, states, now):
@@ -97,16 +100,21 @@ class Predictor:
             for slot in slots:
                 slot['local_hour']=datetime.fromtimestamp(slot['start'],local_timezone).hour
                 slot['dhw_deadline']=slot['start']<next_deadline(slot['start'],model['timezone'])<=slot['end']
-            power_limit=states.get('select.vp_set_max_electrical_add')
+            power_limit=states.get(CAP_ENTITY)
             try:
                 available=float(power_limit.state.lower().replace('kw','').strip()) if fresh(power_limit,now) else 0.
             except (ValueError,AttributeError):
                 available=0.
-            heater_state=states.get('sensor.vp_int_elec_add_heat')
+            heater_state=states.get(STATUS_ENTITY)
             if heater_state and heater_state.state=='Blocked':
                 available=0.
             model['auxiliary_limit_kw']=min(6.5,max(0.,available))
             model['auxiliary_step_kw']=min(1.,model['auxiliary_limit_kw'])
+            managed = bool(self.options.get('inline_notify_service'))
+            requested_kw = self.options.get('inline_max_kw', 6.5)
+            can_offer = managed and supports_window(states, now, requested_kw)
+            if managed:
+                model['auxiliary_limit_kw'] = model['auxiliary_step_kw'] = 0.
             priority=states.get('sensor.vp_priority')
             running=states.get('sensor.vp_current_compressor_frequency')
             on=running and fresh(running,now) and (number(running.state) or 0)>0
@@ -126,9 +134,18 @@ class Predictor:
             budget=PlanningBudget()
             response=dict(self.offset_response)
             def evaluate():
-                return joint_plan(slots,states,now,model,response,min_hz,max_hz,
-                    command_not_before=self.command_not_before,budget=budget,
+                result=joint_plan(slots,states,now,model,response,min_hz,max_hz,
+                    command_not_before=self.command_not_before,budget=ReservedBudget(budget,3.) if can_offer else budget,
                     emitter=response.get('emitter'),incumbent=self.result)
+                if can_offer:
+                    def replay(window_slots, kw):
+                        return replay_plan(window_slots, states, now, {**model, 'auxiliary_limit_kw': kw},
+                                           response, min_hz, max_hz, self.command_not_before, budget,
+                                           response.get('emitter'), width=1, strategy='previous', incumbent=result)
+                    result['inline_candidate'] = compare_windows(
+                        slots, result, now, max(self.command_not_before,self.inline_closed_until),
+                        requested_kw, replay, budget, preferred=self.inline_offer)
+                return result
             try:
                 result=await self.hass.async_add_executor_job(evaluate)
             finally:

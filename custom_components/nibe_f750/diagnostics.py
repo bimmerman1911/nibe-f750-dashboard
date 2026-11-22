@@ -16,6 +16,7 @@ async def async_get_config_entry_diagnostics(hass, entry):
             'forecast_commands':controller.forecast.get('commands',[]),
             'morning_completed_date':controller.data.get('dhw_morning_completed_date'),
             'forecast_model':controller.forecast.get('model',{}),
+            'inline_candidate':controller.forecast.get('inline_candidate'),
             'forecast_summary':{k:controller.forecast.get(k) for k in
                 ('status','message','generated_at','horizon_end','initial_room','initial_water','model_cost','inline_kwh','recovery_plan','constraint_violation_score','dhw_deadline_shortfall_c','planner','dhw_auxiliary_uncertain')},
             'model_state':controller.learner.dump(),
