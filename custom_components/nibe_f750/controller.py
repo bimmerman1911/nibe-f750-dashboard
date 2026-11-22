@@ -13,7 +13,7 @@ from .accounting import Accounting
 from .supervisor import request as adaptive_request
 from .engine import restore_dhw, calculate, fresh, number, SUPPLY, REQUIRED, PRIORITY, ROOM1, ROOM2, TELEMETRY
 from .inline import (Approval, CAP_ENTITY, EVENT, OFFER_LEAD, MIN_LEAD, START_GRACE,
-                     WINDOW_SECONDS, WRITE_INTERVAL, power_option, supports_window)
+                     WRITE_INTERVAL, power_option, supports_window)
 
 _LOGGER = logging.getLogger(__name__)
 DOMAIN = 'nibe_f750'
@@ -59,6 +59,7 @@ class Controller:
         self.unsubscribe_inline = None
         self.data['inline_restore'] = False
         self.data['inline_zero_requested'] = None
+        self.data['inline_request'] = None
 
     async def async_start(self):
         self.accounting.restore(await self.accounting_store.async_load())
@@ -79,6 +80,8 @@ class Controller:
         if type(self.data['enabled']) is not bool or type(self.data['release_dhw']) is not bool or any(number(self.data[k]) is None for k in ('last_cycle', 'last_attempt','c1_direction','c1_changed')) or self.data['c1_direction'] not in (-1.,0.,1.) or self.data['c1_changed']<0:
             raise ValueError('Invalid persisted controller state')
         if self.inline_service:
+            if self.data['enabled']:
+                self.inline.restore(self.data['inline_request'], self.inline_service, self.clock())
             self.unsubscribe_inline = self.hass.bus.async_listen(EVENT, self._inline_response)
         self.unsubscribe = async_track_time_interval(self.hass, self.async_tick, timedelta(minutes=1))
         await self.async_tick()
@@ -135,6 +138,7 @@ class Controller:
             if not enabled:
                 self.inline.clear()
                 self.inline_active_until = None
+                self.data['inline_request'] = self.inline.dump(self.inline_service)
             await self.store.async_save(dict(self.data))
         await self.async_tick()
 
@@ -212,7 +216,7 @@ class Controller:
                 self.predictor.offset_response = self.offset_learner.parameters()
                 self.predictor.air_limit = self.offset_learner.air_limit
                 self.predictor.inline_offer = self.inline.offer
-                self.predictor.inline_closed_until = self.inline.closed_until
+                self.predictor.inline_not_before = max(self.inline.closed_until, self.inline.used_until)
                 self.predictor.command_not_before = max(now,float(self.data['last_cycle'])+902,float(self.data['last_attempt'])+902)
                 self.forecast = await asyncio.wait_for(self.predictor.async_update(states, now), timeout=30)
                 generated = self.forecast.get('generated_at')
@@ -325,7 +329,8 @@ class Controller:
                 if self.predictor:
                     await self.forecast_store.async_save({'records':self.prediction_log,'decisions':self.decision_log})
             return
-        if self.inline.offer and self.inline.offer['start'] < now + WRITE_INTERVAL + 60:
+        inline_window = self._next_inline_window(now)
+        if self.data['enabled'] and inline_window and inline_window['start'] < now + WRITE_INTERVAL + 60:
             # Keep the batch available if a reply arrives just before the window.
             return
         if not self._write_window_open(now):
@@ -382,59 +387,83 @@ class Controller:
         async with self.lock:
             if self.data['enabled'] and not self.stopping:
                 if self.inline.respond(event.data.get('action'), self.clock()):
+                    await self._save_inline_request()
                     self.control['inline_approval'] = self._inline_status()
                     self.notify()
 
+    async def _save_inline_request(self):
+        self.data['inline_request'] = self.inline.dump(self.inline_service)
+        await self.store.async_save(dict(self.data))
+
+    def _latest_inline_plan(self, now):
+        if 0 <= now - self.forecast.get('generated_at', 0) <= 1200:
+            return self.forecast.get('inline_plan')
+        return None
+
+    def _next_inline_window(self, now):
+        return self.inline.next_window(now, self._latest_inline_plan(now))
+
     def _inline_status(self):
+        now = self.clock()
+        offer = self.inline.offer
+        current = self._latest_inline_plan(now)
+        details = offer or current or {}
         if self.data['inline_restore']:
-            active = self.inline_active_until is not None and self.clock() < self.inline_active_until
-            return {'state': 'Permitted' if active else 'Returning to 0 kW', 'end': self.inline_active_until}
-        if self.inline.offer:
-            return {**self.inline.offer, 'state': 'Approved' if self.inline.approved else 'Awaiting approval'}
-        return {'state': 'Off'}
+            active = self.inline_active_until is not None and now < self.inline_active_until
+            return {**details, 'state': 'Permitted' if active else 'Returning to 0 kW',
+                    'end': self.inline_active_until}
+        if offer:
+            next_window = self._next_inline_window(now)
+            return {**offer, 'state': 'Approved' if self.inline.approved else 'Awaiting approval',
+                    'start': next_window['start'] if next_window else None}
+        if now < self.inline.closed_until:
+            return {'state': 'Not approved', 'horizon_end': self.inline.closed_until}
+        return {**details, 'state': 'Planned' if current else 'Off'}
 
     async def _offer_inline(self, now):
         if not self.inline_service or not self.data['enabled'] or self.stopping:
             return
-        candidate = self.forecast.get('inline_candidate')
-        if self.inline.offer and not self.inline.matches(candidate):
-            self.inline.closed_until = max(self.inline.closed_until, self.inline.offer['end'])
-            self.inline.clear()
-        if self.inline.offer or not candidate or not 0 <= now - self.forecast.get('generated_at', 0) <= 1200:
+        plan = self._latest_inline_plan(now)
+        if self.inline.offer or not plan:
             return
-        lead = candidate['start'] - now
-        if not MIN_LEAD <= lead <= OFFER_LEAD or candidate['start'] < self.inline.closed_until:
+        start = plan['windows'][0]['start']
+        if not MIN_LEAD <= start - now <= OFFER_LEAD or start < self.inline.closed_until:
             return
         if not self.hass.services.has_service('notify', self.inline_service):
             return
+        notification = self.inline.notification(plan, self.accounting.zone)
+        await self._save_inline_request()
         try:
-            notification = self.inline.notification(candidate, self.accounting.zone)
             await self.hass.services.async_call('notify', self.inline_service, notification, blocking=True)
         except Exception:
-            self.inline.closed_until = candidate['end']
-            self.inline.clear()
+            self.inline.close()
+            await self._save_inline_request()
             _LOGGER.exception('Could not request phone approval for inline heating')
 
-    async def _set_inline_cap(self, option, end=None):
+    async def _set_inline_cap(self, option, window=None):
         """Use a dedicated batch and reserve it before touching the cloud."""
         now = self.clock()
         if not self._write_window_open(now) or self.stopping:
             return False
-        if end is not None and (not self.data['enabled'] or now >= end - WINDOW_SECONDS + START_GRACE):
+        if window and (not self.data['enabled'] or now >= window['start'] + START_GRACE):
             return False
+        if window:
+            # Persist consumption and restoration together before the cloud call.
+            self.inline.used_until = window['end']
+            self.data['inline_request'] = self.inline.dump(self.inline_service)
         self.data['last_cycle'] = self.data['last_attempt'] = now
         # Restorability must survive a crash or ambiguous response to the write.
         self.data['inline_restore'] = True
         self.data['inline_zero_requested'] = None
         await self.store.async_save(dict(self.data))
         try:
-            if self.stopping or (end is not None and (not self.data['enabled']
-                    or self.clock() >= end - WINDOW_SECONDS + START_GRACE)):
+            if self.stopping or (window and (not self.data['enabled']
+                    or self.clock() >= window['start'] + START_GRACE)):
                 return False
             await self.hass.services.async_call(
                 'select', 'select_option', {'entity_id': CAP_ENTITY, 'option': option}, blocking=True)
-            self.inline_active_until = end
-            if end is None:
+            self.inline_active_until = window['end'] if window else None
+            if window is None:
                 self.data['inline_zero_requested'] = now
             return True
         except Exception:
@@ -447,6 +476,8 @@ class Controller:
 
     async def _inline_tick(self, states, now):
         """Return True while heater operation reserves the cloud write batch."""
+        if self.inline.expire(now):
+            await self._save_inline_request()
         cap = states.get(CAP_ENTITY)
         off = power_option(cap, 0)
         if self.data['inline_restore'] and await self._confirmed_inline_off(cap, off, now):
@@ -466,28 +497,19 @@ class Controller:
             await self._set_inline_cap(off)
             self.control['inline_approval'] = {'state': 'Returning to 0 kW'}
             return True
-        offer = self.inline.offer
-        if not offer or now < offer['start']:
-            return False
-        if not self.inline.approved or not self.data['enabled'] or now >= offer['start'] + START_GRACE:
-            self.inline.closed_until = offer['end']
-            self.inline.clear()
-            return False
-        forecast = self.forecast
-        if not self.inline.matches(forecast.get('inline_candidate')) or not 0 <= now - forecast.get('generated_at', 0) <= 1200:
+        window = self._next_inline_window(now)
+        if not window or now < window['start'] or not self.inline.approved or not self.data['enabled']:
             return False
         priority = states.get(PRIORITY)
         dm = states.get('sensor.vp_degree_minutes_2')
         deficit = number(dm.state) if fresh(dm, now) else None
         temperatures = [number(states[e].state) if fresh(states.get(e), now) else None for e in (ROOM1, ROOM2)]
-        upper = forecast.get('model', {}).get('room_max_c', 20.5)
-        if (self._write_window_open(now) and supports_window(states, now, offer['kw'])
+        upper = self.forecast.get('model', {}).get('room_max_c', 20.5)
+        if (self._write_window_open(now) and supports_window(states, now, window['kw'])
                 and cap.state == off and fresh(priority, now) and priority.state == 'Heating'
                 and all(v is not None and 5 <= v < upper for v in temperatures)
                 and deficit is not None and deficit <= self.offset_learner.aux_dm):
-            self.inline.closed_until = offer['end']
-            self.inline.clear()
-            await self._set_inline_cap(power_option(cap, offer['kw']), offer['end'])
+            await self._set_inline_cap(power_option(cap, window['kw']), window)
         self.control['inline_approval'] = self._inline_status()
         return True
 

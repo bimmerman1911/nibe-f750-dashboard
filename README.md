@@ -23,13 +23,13 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
-## Phone approval for inline heat — v0.30.0
+## Phone approval for inline heat — v0.31.0
 
 In NIBE F750 Smart Control’s integration settings, select **Phone for inline-heater approvals** and leave **Maximum approved inline power** at 6.5 kW for the full available cap. The Home Assistant Companion App supplies the phone notification service. Select **Off** to leave the cap under native/manual control. For managed windows, allow additional heat in the F750's native operating settings and leave its normal power cap at 0 kW. An independent native block can still prevent the heater running.
 
-Smart Control first plans with the compressor alone. It considers a phone request if the plan predicts a room or tank at least 0.1°C below its minimum, or at least 0.5°C short of the 06:00 charge target. It compares a bounded set of low-price windows against the compressor-only plan. It offers one useful window at a time and replans before any additional request. A reply of **Approve this window** permits only that window. **Decline**, no reply or a reply at or after the start leaves the cap at 0 kW.
+Smart Control first plans with the compressor alone. It considers inline heat if the plan predicts a room or tank at least 0.1°C below its minimum, or at least 0.5°C short of the 06:00 charge target. It tests low-price windows together for the upcoming 12 hours shown on the card. The phone gets one request about an hour before the first window. **Approve plan** covers every window listed in that request. Later forecasts can skip a listed window if it is no longer needed. Extra windows and extensions require a new approval after the original horizon ends. **Decline**, no reply or a reply at or after the first start leaves the cap at 0 kW for that plan.
 
-Windows start on a price-quarter boundary and are modeled over 16 minutes. The existing 902-second write separation and one-minute polling can shift the actual start and restoration. The approved value is a power cap. NIBE determines heater staging and demand. The controller restores 0 kW at the first permitted end-of-window write and waits for the reported value to confirm it. A Home Assistant or myUplink outage can delay restoration, including after an approved run. At restart the integration gives closing the cap priority if a previous write might have left it open.
+Windows start on a price-quarter boundary. Each window is modeled over 16 minutes, with consecutive selected quarters combined into one run. The existing 902-second write separation and one-minute polling can shift the actual start and restoration. The approved value is a power cap. NIBE determines heater staging and demand. The controller restores 0 kW at the first permitted end-of-window write and waits for the reported value to confirm it. A Home Assistant or myUplink outage can delay restoration, including after an approved run. A Home Assistant restart preserves the plan decision and gives closing the cap priority if a previous write might have left it open.
 
 ## Indoor temperature history and plan — v0.29.0
 

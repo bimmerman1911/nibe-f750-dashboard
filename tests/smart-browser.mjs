@@ -165,12 +165,20 @@ try {
     const history=Array.from({length:96},(_,i)=>({start:now-43200+i*900,end:now-43200+(i+1)*900,price:.8+.5*Math.sin(i/8),inline_kw:i===4?.5:i===60?1:0,predicted_kw:i%24<12?1.3:0,actual_kw:i<48&&i!==12?(i%24<14?1.1:.15):null,action:i%24<12?'heat':'off'}));
     window.smartHass.states['sensor.nibe_electricity_history']={state:'Recording',attributes:{controller_domain:'nibe_f750',electricity:{updated_at:now,timezone:'Europe/Stockholm',history,week:[{date:'2026-11-02',actual:20,baseline:25,covered_hours:24},{date:'2026-11-03',actual:18,baseline:22,covered_hours:24},{date:'2026-11-04',actual:8,baseline:10,covered_hours:4},{date:'2026-11-05',actual:999,baseline:999,covered_hours:4}]}}};
     window.jointControl={mode:'Adaptive',reason:'Using stored warmth during expensive prices',target_c:20,room_min_c:18,room_max_c:20.5,offset_c1:4,command_not_before:now+600,dhw:'Normal'};
+    window.jointControl.inline_approval={state:'Awaiting approval', start:now+3600, horizon_end:now+43200, windows:[
+      {start:now+3600,end:now+4560,kw:6.5,estimated_kwh:.8},
+      {start:now+7200,end:now+9060,kw:6.5,estimated_kwh:1.4},
+    ]};
     window.smartHass.states['switch.nibe_smart_control'].attributes.control=window.jointControl;
     window.smartHass.states['select.vp_comfort_mode']={state:'Normal',attributes:{}};
     Object.assign(window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast,{generated_at:now,horizon_end:now+86400,planner:'joint',model:{room_min_c:18,room_target_c:20,room_max_c:20.5},steps:[{start:now,end:now+900,compressor_kw:1,inline_kw:0,price:1,outdoor:5,action:'heat',dhw_mode:'Normal',offset:4,room:20,water:49},{start:now+70*900-43200,end:now+71*900-43200,compressor_kw:1,inline_kw:2,price:1,outdoor:5,action:'dhw',dhw_mode:'Normal',room:20,water:49}]});
+    window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast.inline_plan=window.jointControl.inline_approval;
     const c=document.querySelector('nibe-f750-smart-card');c._error='';c.hass=window.smartHass;
   });
   assert.equal(await card.locator('.weekly-costs').count(),0);
+  assert.match(await card.locator('[data-inline-approval]').textContent(),/Awaiting approval.*through/);
+  assert.equal((await card.locator('[data-inline-windows]').textContent()).match(/up to 6[.,]5 kW/g)?.length,2);
+  assert.match(await card.locator('.prediction').textContent(),/Proposed inline heat 2[.,]2 kWh/);
   await page.evaluate(async()=>{
     const c=document.querySelector('nibe-f750-smart-card'),now=Date.now();
     window.smartHass.callApi=async(method,path)=>{

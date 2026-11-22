@@ -22,7 +22,7 @@ class Predictor:
         self.air_limit=None
         self.command_not_before=0.
         self.inline_offer=None
-        self.inline_closed_until=0.
+        self.inline_not_before=0.
         self.result={'status':'Waiting for forecast','message':'Loading prices and hourly weather.', 'steps':[]}
 
     async def async_update(self, states, now):
@@ -142,8 +142,8 @@ class Predictor:
                         return replay_plan(window_slots, states, now, {**model, 'auxiliary_limit_kw': kw},
                                            response, min_hz, max_hz, self.command_not_before, budget,
                                            response.get('emitter'), width=1, strategy='previous', incumbent=result)
-                    result['inline_candidate'] = compare_windows(
-                        slots, result, now, max(self.command_not_before,self.inline_closed_until),
+                    result['inline_plan'] = compare_windows(
+                        slots, result, now, max(self.command_not_before,self.inline_not_before),
                         requested_kw, replay, budget, preferred=self.inline_offer)
                 return result
             try:
