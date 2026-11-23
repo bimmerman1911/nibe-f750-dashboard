@@ -48,6 +48,29 @@ class PrimaryCircuitTests(unittest.TestCase):
         self.assertGreater(low['steps'][0]['degree_minutes'],-50)
         self.assertLess(high['steps'][0]['degree_minutes'],-50)
 
+    def test_degree_minutes_during_hot_water_determine_space_heating_restart(self):
+        states = readings(room=19.2, tank=49., mode='Hot water')
+        states[engine.DHW].state = 'Normal'
+        states[engine.SUPPLY].state = '34'
+        states['sensor.vp_degree_minutes_2'].state = '-90'
+        slots = timeline(count=2, price=lambda _: 2.25)
+        commands = [{'start': NOW, 'end': slots[-1]['end'], 'offset': 0., 'dhw_mode': 'Normal'}]
+
+        def simulate(target):
+            states[engine.REQUIRED].state = str(target)
+            return joint._search(slots, states, NOW, MODEL, strategy='previous',
+                                 incumbent={'commands': commands})['steps']
+
+        low_target = simulate(20)
+        high_target = simulate(44)
+        for steps in (low_target, high_target):
+            self.assertTrue(all(piece['action'] == 'dhw' for piece in steps[0]['activity']))
+            self.assertGreater(steps[0]['water'], 49.)
+        self.assertGreater(low_target[0]['degree_minutes'], 0.)
+        self.assertLess(high_target[0]['degree_minutes'], -90.)
+        self.assertEqual(low_target[1]['action'], 'off')
+        self.assertEqual(high_target[1]['action'], 'heat')
+
     def test_secondary_load_can_indirectly_change_primary_degree_minutes(self):
         # Holding C1's target fixed, a lower actual primary supply still matters.
         self.assertGreater(native.primary_degree_minutes_step(-50,25.7,20,.1),-50)

@@ -371,7 +371,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                             compressor=0. if dhw or not running else max(cap*min_hz/max_hz,min(cap,heat))
                             extra=0. if dhw or dm>response.get('aux_dm',-700) else min(allowed_aux,max(0,heat-cap))
                             q=compressor+extra
-                            if not dhw:dm=primary_degree_minutes_step(dm,supply,required,h)
+                            dm=primary_degree_minutes_step(dm,supply,required,h)
                             equilibrium=r+q/conductance
                             supply=max(15.,min(80.,supply+(equilibrium-supply)*(1-math.exp(-h/.5))))
                             stored,delivered=filtered_heat(stored,q,h,m.get('heating_lag_hours',1.))

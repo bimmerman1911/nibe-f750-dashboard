@@ -23,6 +23,10 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Degree minutes during hot-water charging — v0.31.1
+
+The planner now continues updating degree minutes from C1 supply and its target during hot-water charging. It carries that balance into the forecast for when the compressor can resume space heating.
+
 ## Phone approval for inline heat — v0.31.0
 
 In NIBE F750 Smart Control’s integration settings, select **Phone for inline-heater approvals** and leave **Maximum approved inline power** at 6.5 kW for the full available cap. The Home Assistant Companion App supplies the phone notification service. Select **Off** to leave the cap under native/manual control. For managed windows, allow additional heat in the F750's native operating settings and leave its normal power cap at 0 kW. An independent native block can still prevent the heater running.

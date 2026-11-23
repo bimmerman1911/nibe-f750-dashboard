@@ -233,8 +233,7 @@ def plan_offsets(result,states,now,response,min_hz,max_hz,budget=None):
                     # Auxiliary is a prediction of native operation, never a command.
                     auxiliary=0. if dhw or dm>response.get('aux_dm',-700) else min(m.get('auxiliary_limit_kw',0),max(0,heat-cap))
                     q=compressor+auxiliary
-                    if not dhw:
-                        dm=primary_degree_minutes_step(dm,supply,required,h)
+                    dm=primary_degree_minutes_step(dm,supply,required,h)
                     equilibrium=r+q/conductance
                     supply=bounded(supply+bounded((equilibrium-supply)*(1-math.exp(-h/.5)),-120*h,120*h),15,80)
                     stored,delivered=filtered_heat(stored,q,h,m.get('heating_lag_hours',1))

@@ -11,11 +11,11 @@ def _finite(value):
 
 
 def primary_degree_minutes_step(degree_minutes, primary_supply, primary_target, hours):
-    """Integrate C1 supply error, in degree-minutes, during space heating.
+    """Integrate C1 supply error, in degree-minutes, including during DHW.
 
     The ECS secondary target regulates its mixing valve. It is not an input
     here. Secondary heat extraction can still change the actual primary supply.
-    Callers retain the existing hold during DHW charging.
+    DHW takes priority over space heating while this demand continues to change.
     """
     if not all(_finite(v) for v in (degree_minutes,primary_supply,primary_target,hours)) or hours<0:
         raise ValueError('Invalid primary degree-minute inputs')
