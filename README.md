@@ -23,6 +23,10 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Temporary heat from a fireplace or sunlight — v0.32.0
+
+Smart Control checks each room for two successive rises beyond what its model expects from outdoor temperature and the heat pump. It sets aside affected observations for room and emitter learning while continuing the hot-water and native compressor learning. The forecast includes the extra heat in the affected room and lets it fade. If the other room is still near its minimum, Smart Control trims the C1 offset without a large drop that could reset degree minutes and cut shared heating.
+
 ## Recovery from a sudden degree-minute reset — v0.31.3
 
 While space heating is running, Smart Control checks for jumps from at least 120 degree minutes below zero to within 20 of zero that are too fast to explain from the C1 supply temperatures. It keeps the pre-jump balance as a temporary recovery target. With room to heat, it raises or holds the C1 offset at the next permitted write until the pump reports that balance again. It then refreshes the normal plan.

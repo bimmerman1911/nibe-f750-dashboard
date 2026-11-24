@@ -94,6 +94,41 @@ class PrimaryCircuitTests(unittest.TestCase):
         stricter = simulate(5, {**MODEL, 'compressor_max_supply_diff_c': 7.})
         self.assertEqual(stricter['action'], 'off')
 
+    def test_temporary_warmth_fades_only_in_the_affected_room(self):
+        states = readings(room=20., mode='Off', q=0.)
+        states[engine.ROOM2].state = '21'
+        states[engine.SUPPLY].state = '25'
+        slots = timeline(count=16)
+        commands = [{'start': NOW, 'end': slots[-1]['end'], 'offset': -10., 'dhw_mode': 'Economy'}]
+        result = joint._search(slots, states, NOW, {**MODEL, 'temporary_heat': ((0., 0.), (1., 2.))},
+                               strategy='previous', incumbent={'commands': commands})
+        first, last = result['steps'][0], result['steps'][-1]
+        self.assertEqual(result['initial_room'], 20.5)
+        self.assertGreater(first['room2'] - first['room1'], 1.)
+        self.assertLess(last['room2'] - last['room1'], .20)
+        self.assertAlmostEqual(first['room'], (first['room1'] + first['room2']) / 2)
+
+    def test_fireplace_limits_a_c1_cut_while_the_other_room_is_cold(self):
+        states = readings(room=20.)
+        for entity, value in ((engine.ROOM1, 19.2), (engine.ROOM2, 21), (engine.C1, 4),
+                              (engine.SUPPLY, 41), (engine.REQUIRED, 42), ('sensor.vp_degree_minutes_2', -565)):
+            states[entity].state = str(value)
+        profile = ((0., 0.), (1.8, 2.))
+        model = {**MODEL, 'temporary_heat': profile, 'room_min_c': 19.}
+        slots = timeline(count=1)
+        commands = [{'start': NOW, 'end': slots[-1]['end'], 'offset': -10., 'dhw_mode': 'Economy'}]
+        forecast = joint._search(slots, states, NOW, model, strategy='previous',
+                                 incumbent={'commands': commands})
+        self.assertEqual(forecast['steps'][0]['action'], 'heat')
+        self.assertEqual(forecast['commands'][0]['offset'], 3.)
+
+        control = {'target_c': 20., 'offset_c1': -10., 'dhw': 'Economy', 'room_min_c': 19.}
+        result = engine.calculate(states, NOW, 12, control=control, temporary_heat=profile)
+        self.assertEqual(dict(result['writes'])[engine.C1], 3.)
+        states[engine.ROOM1].state = '20.4'
+        result = engine.calculate(states, NOW, 12, control=control, temporary_heat=profile)
+        self.assertEqual(dict(result['writes'])[engine.C1], -10.)
+
     def test_secondary_load_can_indirectly_change_primary_degree_minutes(self):
         # Holding C1's target fixed, a lower actual primary supply still matters.
         self.assertGreater(native.primary_degree_minutes_step(-50,25.7,20,.1),-50)

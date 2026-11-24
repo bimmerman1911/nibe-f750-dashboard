@@ -212,9 +212,13 @@ class Controller:
                 'reported_at': states[e].last_reported.isoformat() if e in states else None} for e in TELEMETRY}
             self.last_sample = now
         try:
+            temporary_before = self.learner.temporary_heat.active
             self.learner.update(states,now,dt_util.now().hour)
+            if self.predictor and temporary_before != self.learner.temporary_heat.active:
+                self.predictor.last_refresh = None
             revision=self.offset_learner.revision
-            self.offset_learner.update(states,now,self.learner.prior['compressor_heat_kw'])
+            self.offset_learner.update(states,now,self.learner.prior['compressor_heat_kw'],
+                                       learn_emitter=not self.learner.temporary_heat.learning_hold)
             if revision!=self.offset_learner.revision:
                 await self.offset_store.async_save(self.offset_learner.dump())
             if self.learner.revision != self.saved_learning_revision:
@@ -303,7 +307,7 @@ class Controller:
             result = calculate(states, now, dt_util.now().hour,
                 self.short_since is not None and now-self.short_since >= 900, control=chosen,options=options,
                 response=response, compressor_heat_kw=self.learner.prior['compressor_heat_kw'],
-                recovery_offset=recovery_offset)
+                recovery_offset=recovery_offset, temporary_heat=self.learner.temporary_heat.profile(now))
             if result is None:
                 result = {'targets':[], 'writes':restore_dhw(states)}
                 self.status = 'Waiting for readings'
@@ -317,6 +321,9 @@ class Controller:
                 self.control['degree_minute_recovery'] = self.degree_recovery.event
                 if recovery_offset is not None:
                     self.control['offset_c1'] = recovery_offset
+            elif result.get('temporary_heat_trim') and not self.control.get('locked'):
+                self.control['offset_c1'] = result['offset_c1']
+                self.control['reason'] = 'Keeping heat available to the cooler room.'
             elif balance and not self.control.get('locked'):
                 self.control['capacity_balance'] = balance
                 self.control['offset_c1'] = balance['offset']

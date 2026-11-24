@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 import math
 from .engine import ROOM1, ROOM2, PRIORITY, fresh, number
 from .predictive import DEFAULTS
+from .coordination import differential_rate
+from .temporary_heat import NO_HEAT, TemporaryHeat
 
 FREQUENCY = 'sensor.vp_current_compressor_frequency'
 MAXIMUM = 'sensor.vp_max_compressor_frequency'
@@ -67,6 +69,7 @@ class ThermalLearner:
         self.mode_since = None
         self.run_since = None
         self.comfort_since = None
+        self.temporary_heat = TemporaryHeat()
 
     def dump(self):
         # Deliberately omit partial windows: never train across a restart/gap.
@@ -175,6 +178,7 @@ class ThermalLearner:
         comfort = states.get('select.vp_comfort_mode')
         return {'time':now,'hour':hour,'room':(r1+r2)/2,'outside':outside,
                 'rooms':(r1,r2),
+                'room_reports':tuple(states[e].last_reported.timestamp() for e in (ROOM1, ROOM2)),
                 'heat':heat if mode_name=='Heating' else 0., 'fraction':bounded(freq/maximum,0,1),
                 'heater':heater,'mode':mode_name,'running':freq>0,'tank':tank,
                 'comfort':comfort.state if comfort else None}
@@ -184,12 +188,15 @@ class ThermalLearner:
         previous = self.previous
         self.previous = current
         if current is None:
+            self.temporary_heat.break_observations()
             self.mode_since = self.run_since = None
             self.comfort_since = None
             self.window = self.charge_window = self.draw_window = None
             self.rejected += 1
             return False
         if previous is None or not 30 <= now-previous['time'] <= 180:
+            self.temporary_heat.break_observations()
+            self.temporary_heat.observe(current['rooms'], current['room_reports'], (0., 0.), 0., now)
             self.window = self.charge_window = self.draw_window = None
             age=(now-self.heat_timestamp)/3600 if self.heat_timestamp is not None else None
             for bank in self.banks:
@@ -209,6 +216,7 @@ class ThermalLearner:
         dt = (now-previous['time'])/3600
         if (any(abs(a-b)>.8 for a,b in zip(current['rooms'],previous['rooms']))
             or abs(current['outside']-previous['outside'])>3):
+            self.temporary_heat.break_observations()
             self.window = self.charge_window = self.draw_window = None
             self.rejected += 1
             return False
@@ -220,6 +228,8 @@ class ThermalLearner:
         heat = (previous['heat']+current['heat'])/2
         for i,bank in enumerate(self.banks):
             bank['heat'], average = filtered_heat(bank['heat'],heat,dt,bank['lag'])
+            if i == self.selected:
+                delivered = average
             x = self.window['features'][i]
             x[0] += gradient*dt
             x[1] += average*dt
@@ -230,6 +240,15 @@ class ThermalLearner:
         self.window['heat_min']=min(self.window['heat_min'],previous['heat'],current['heat'])
         self.window['heat_max']=max(self.window['heat_max'],previous['heat'],current['heat'])
         self._water(previous,current,dt)
+        (loss, capacity, gain), _ = self._bounded_parameters()
+        expected = (loss * gradient + delivered + gain) * dt / capacity
+        differential = differential_rate(self.room_response, delivered, self.prior['compressor_heat_kw']) * dt
+        self.temporary_heat.observe(current['rooms'], current['room_reports'],
+                                    (expected + differential, expected - differential),
+                                    self.banks[self.selected]['score'], now)
+        if self.temporary_heat.learning_hold:
+            self.window = None
+            return False
         if self.window['hours'] < .5-1e-6:
             return False
         y = current['room']-self.window['start']
@@ -400,6 +419,7 @@ class ThermalLearner:
         bank = self.banks[self.selected]
         (loss,capacity,gain),_=self._bounded_parameters()
         return {**self.quality(),'room_response':dict(self.room_response),'heat_loss_kw_per_k':loss, 'thermal_capacity_kwh_per_k':capacity,
+                'temporary_heat':self.temporary_heat.profile(self.previous['time']) if self.previous else NO_HEAT,
                 'internal_gain_kw':gain, 'heating_lag_hours':bank['lag'],
                 'initial_heat_kw':bank['heat'], 'dhw_heat_kw':self.dhw_capacity,
                 'dhw_fraction':self.dhw_fraction,'dhw_start_c':self.dhw_start_c,

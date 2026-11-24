@@ -58,12 +58,12 @@ class OffsetLearner:
         except (KeyError,TypeError,ValueError,AssertionError):
             return False
 
-    def update(self,states,now,capacity):
+    def update(self,states,now,capacity, *, learn_emitter=True):
         revision=self.air_limit.revision
         self.air_limit.update(states,now)
         if self.air_limit.revision!=revision:self.revision+=1
         sample=inputs(states,now,capacity)
-        if sample is not None and all(fresh(states.get(e),now) and number(states[e].state) is not None for e in ('sensor.ovanvaning_temperature','sensor.nedervaning_temperature')):
+        if learn_emitter and sample is not None and all(fresh(states.get(e),now) and number(states[e].state) is not None for e in ('sensor.ovanvaning_temperature','sensor.nedervaning_temperature')):
             room=sum(float(states[e].state) for e in ('sensor.ovanvaning_temperature','sensor.nedervaning_temperature'))/2
             self._steady_sample(sample,room,capacity)
             fitted=emitter_estimate({**sample,'time':sample.get('measurement_time',sample['time'])},room,{'compressor_heat_kw':capacity},self.emitter)

@@ -18,6 +18,7 @@ from .dhw import policy, charge, next_deadline
 from .timing import improve as improve_timing
 from .work import ReservedBudget
 from .coordination import committed_offset, differential_rate
+from .temporary_heat import EVENT_SECONDS, NO_HEAT, cooler_room_needs_heat, forecast_warmth, limit_offset_drop
 
 COMMAND_SECONDS=960.
 # SEK per squared degree-hour inside the uncertainty buffer. Actual configured
@@ -83,6 +84,7 @@ class State:
     comfort_risk: float=0.
     offset_direction: float=0.
     offset_changed: float=0.
+    temporary_warmth: tuple=(0., 0.)
 
 
 def selection_key(result):
@@ -193,7 +195,12 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
         if v is None:raise ValueError('Fresh room, tank and comfort-mode readings are required')
         return v
     rooms=[read(ROOM1),read(ROOM2)]
-    room=sum(rooms)/2
+    initial_room=sum(rooms)/2
+    temporary = m.get('temporary_heat', NO_HEAT)
+    initial_warmth = tuple(excess for excess, _ in temporary)
+    has_temporary_heat = any(initial_warmth)
+    baseline_rooms = tuple(value - warmth for value, warmth in zip(rooms, initial_warmth))
+    room = sum(baseline_rooms) / 2
     water=(read('sensor.vp_hot_water_top_bt7')+read('sensor.vp_hot_water_charging_bt6'))/2
     native_mode=states.get(DHW)
     if not fresh(native_mode,now) or native_mode.state not in ('Normal','Economy','Lux'):
@@ -218,19 +225,22 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
     cap=m['compressor_heat_kw']*max_hz/reference_hz
     m['dhw_fraction']=min(m['dhw_fraction'],max_hz/reference_hz)
     aux_limit=max(0,m.get('auxiliary_limit_kw',0.))
-    calibration=emitter_estimate({**sample,'time':sample.get('measurement_time',sample['time'])},room,m,emitter)
+    calibration=emitter_estimate({**sample, 'mode':None if has_temporary_heat else sample['mode'],
+                                  'time':sample.get('measurement_time',sample['time'])},initial_room,m,emitter)
     conductance=calibration['conductance_kw_per_k']
     theta=response.get('theta',[.35,.25,.75,0.])
     max_supply_diff = m['compressor_max_supply_diff_c']
     gain=response.get('offset_gain',2.5)
     if not isinstance(gain,(int,float)) or not math.isfinite(gain) or not 0<gain<=10:raise ValueError('Invalid native offset gain')
     uncertainty=min(.25,max(.05,m.get('response_uncertainty_c',.2)*.5),max(0,(m['room_max_c']-m['room_min_c'])/4))
-    gap=min(rooms)-room;warm_gap=max(rooms)-room
     room_response=m.get('room_response',{})
     rates=[room_response.get(k,0.) for k in ('coasting_rate','heating_rate')]
     if any(not isinstance(v,(int,float)) or not math.isfinite(v) or abs(v)>.3 for v in rates):raise ValueError('Invalid differential room response')
+    def room_pair(r, delta, warmth):
+        return (r + baseline_rooms[0] - room + delta + warmth[0],
+                r + baseline_rooms[1] - room - delta + warmth[1])
     def cold_room(n):
-        return n.room+min(rooms[0]-room+n.room_delta,rooms[1]-room-n.room_delta)
+        return min(room_pair(n.room, n.room_delta, n.temporary_warmth))
     profile=m.get('dhw_profile',[m['dhw_draw_kw']]*24)
     if len(profile)!=24 or any(not math.isfinite(v) or v<0 for v in profile):raise ValueError('Invalid hourly DHW profile')
     zone=ZoneInfo(m.get('timezone','Europe/Stockholm'))
@@ -241,7 +251,8 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
     balance = capacity_balance(states, now, m['room_min_c'], m['room_max_c'], response, m['compressor_heat_kw'])
     first=State(room,water,sample['supply'],sample['heat'],m.get('initial_heat_kw',sample['heat']),
                 sample['dm'],sample['compressor_on'],sample['mode']=='Hot water' and sample['compressor_on'],
-                m.get('dhw_morning_pending',False),sample['offset'],native_mode.state)
+                m.get('dhw_morning_pending',False),sample['offset'],native_mode.state,
+                temporary_warmth=initial_warmth)
     if m.get('dhw_morning_completed'):
         first.completed_day=datetime.fromtimestamp(now,zone).date().isoformat()
     first.offset_direction=m.get('c1_direction',0.);first.offset_changed=m.get('c1_changed',0.)
@@ -270,6 +281,14 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
             chunks.append({**s,'start':t,'end':until,'local_hour':datetime.fromtimestamp(t,zone).hour})
             t=until
             if t<stop-1e-6:j+=1
+        simulated_chunks = []
+        for chunk in chunks:
+            dt = (chunk['end'] - chunk['start']) / 3600
+            n = max(1, math.ceil(dt * 12))
+            h = dt / n
+            warmth = [forecast_warmth(temporary, (chunk['start'] - now) / 3600 + (k + 1) * h)
+                      for k in range(n)] if has_temporary_heat else [(0., 0.)] * n
+            simulated_chunks.append((chunk, dt, h, warmth))
         candidates=[]
         due=next_deadline(stop-1e-4,str(zone))
         hours_to_due=max(0.,(due-stop)/3600)
@@ -294,12 +313,13 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
             # Forced reserve/charge completion collapses equivalent choices.
             if not holding and reserve['dhw']=='Normal':modes=['Normal']
             offsets=[previous.offset] if holding else levels
+            indoor_mean = previous.room + sum(previous.temporary_warmth) / 2
             if limited and not holding:
                 cheap=chunks[0]['price']<=median([s['price'] for s in slots[slot_index:]])
                 preferred=m['room_target_c'] if cheap else m['room_min_c']+uncertainty+.3
                 load=m['heat_loss_kw_per_k']*(preferred-chunks[0]['outdoor'])-m.get('internal_gain_kw',0.)
                 need=max(0.,min(cap,load+(preferred-cold_room(previous))*m['thermal_capacity_kwh_per_k']/2))
-                desired_supply=previous.room+need/conductance+1.5
+                desired_supply=indoor_mean+need/conductance+1.5
                 wanted=sample['offset']+(desired_supply-sample['required']+1.2*(chunks[0]['outdoor']-sample['outside']))/gain
                 offsets=[min(levels,key=lambda v:abs(v-wanted))]
                 if reserve['dhw']=='Normal':modes=['Normal']
@@ -319,7 +339,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                 load=max(0.,m['heat_loss_kw_per_k']*(cold_room(previous)-chunks[0]['outdoor'])-m.get('internal_gain_kw',0.))
                 projected=cold_room(previous)+(previous.stored-load)*delay/m['thermal_capacity_kwh_per_k']
                 need=max(0.,min(cap,load+(target-projected)*m['thermal_capacity_kwh_per_k']/delay))
-                desired=previous.room+need/conductance
+                desired=indoor_mean+need/conductance
                 wanted=sample['offset']+(desired-sample['required']+1.2*(chunks[0]['outdoor']-sample['outside']))/gain
                 if not cheap and isinstance(strategy,(int,float)) and projected>m['room_min_c']+uncertainty:
                     wanted=strategy
@@ -330,7 +350,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                     # complete alternatives; neither bypasses actual limits.
                     target=m['room_target_c'] if cursor>=strategy.until else min(m['room_target_c'],m['room_min_c']+uncertainty+.1)
                     need=max(0.,min(cap,load+(target-projected)*m['thermal_capacity_kwh_per_k']/delay))
-                    desired=previous.room+need/conductance
+                    desired=indoor_mean+need/conductance
                     wanted=sample['offset']+(desired-sample['required']+1.2*(chunks[0]['outdoor']-sample['outside']))/gain
                     offsets=[min(levels,key=lambda v:abs(v-wanted))] if cursor>=strategy.until or strategy.bridge else [levels[0]]
                 if strategy=='previous':
@@ -345,7 +365,16 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                 offsets = [balance['offset']]
             else:
                 offsets=list(dict.fromkeys(committed_offset(o,previous.offset,previous.offset_direction,previous.offset_changed,cursor,
-                    cold_room(previous)<m['room_min_c'] or previous.room+max(rooms[0]-room+previous.room_delta,rooms[1]-room-previous.room_delta)>m['room_max_c']) if not holding else o for o in offsets))
+                    cold_room(previous)<m['room_min_c'] or max(room_pair(previous.room, previous.room_delta, previous.temporary_warmth))>m['room_max_c']) if not holding else o for o in offsets))
+            if (not holding and has_temporary_heat and cursor - now < EVENT_SECONDS and previous.running
+                    and not previous.charging and cooler_room_needs_heat(
+                        room_pair(previous.room, previous.room_delta, previous.temporary_warmth),
+                        temporary, m['room_min_c'])):
+                target = (sample['required'] + gain * (previous.offset - sample['offset'])
+                          - 1.2 * (chunks[0]['outdoor'] - sample['outside']))
+                offsets = list(dict.fromkeys(limit_offset_drop(offset, previous.offset, previous.supply, target,
+                                                         gain, max_supply_diff, levels)
+                                             for offset in offsets))
             for offset in offsets:
                 for mode in modes:
                     expanded+=1
@@ -355,14 +384,12 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                     pending=reserve['dhw_morning_override'] if not holding else previous.pending
                     cost=previous.cost;penalty=previous.penalty;auxiliary_energy=previous.aux
                     miss=previous.shortfall;pieces=[];violation=previous.violation
-                    for chunk in chunks:
-                        dt=(chunk['end']-chunk['start'])/3600
-                        n=max(1,math.ceil(dt*12));h=dt/n
+                    for chunk, dt, h, warmth in simulated_chunks:
                         energy=extra_energy=0.;water_minutes=0.;min_room=r;activity=[]
                         allowed_aux = aux_limit if chunk.get('inline_allowed', True) else 0.
                         required=max(15.,min(60.,sample['required']+gain*(offset-sample['offset'])
                                             -1.2*(chunk['outdoor']-sample['outside'])))
-                        for k in range(n):
+                        for k, extra_warmth in enumerate(warmth):
                             draw=profile[chunk['local_hour']]
                             observed_aux=min(allowed_aux,sample['inline']) if sample['mode']=='Hot water' else 0.
                             qw,fraction,water_aux,charging=charge(w,mode!='Economy',charging,h,m,observed_aux,draw)
@@ -378,7 +405,8 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                             extra=0. if dhw or dm>response.get('aux_dm',-700) else min(allowed_aux,max(0,heat-cap))
                             q=compressor+extra
                             dm=primary_degree_minutes_step(dm,supply,required,h)
-                            equilibrium=r+q/conductance
+                            ambient = r + sum(extra_warmth) / 2
+                            equilibrium=ambient+q/conductance
                             supply=max(15.,min(80.,supply+(equilibrium-supply)*(1-math.exp(-h/.5))))
                             stored,delivered=filtered_heat(stored,q,h,m.get('heating_lag_hours',1.))
                             r,w=thermal_step(r,w,chunk['outdoor'],h,delivered,qw,m,draw)
@@ -398,7 +426,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                             rate=differential_rate(room_response,q,m['compressor_heat_kw'])
                             target_delta=2.*rate
                             room_delta=target_delta+(room_delta-target_delta)*math.exp(-h/2.)
-                            room1=r+rooms[0]-room+room_delta;room2=r+rooms[1]-room-room_delta
+                            room1, room2 = room_pair(r, room_delta, extra_warmth)
                             cold=min(room1,room2);warm=max(room1,room2);min_room=min(min_room,cold)
                             below=max(0,m['room_min_c']+uncertainty-cold)
                             above=max(0,warm-m['room_max_c']+uncertainty)
@@ -412,7 +440,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                             # At saturation, do not reward requesting temperatures
                             # far beyond measured emitter capacity indefinitely.
                             if compressor>=cap*.95:
-                                excess=max(0,required-attainable_supply(r,cap,conductance)-3)
+                                excess=max(0,required-attainable_supply(ambient,cap,conductance)-3)
                                 penalty+=h*.03*excess*excess
                             moment=chunk['start']+(k+1)*h*3600
                             if w>=m['tank_max_c']-.5:
@@ -427,7 +455,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                         pieces.append({**chunk,'activity':activity,'offset':offset,'dhw_mode':mode,
                             'dhw_reason':reserve['dhw_reason'] if reserve['dhw']=='Normal' or mode=='Economy' else 'Scheduled DHW period',
                             'action':'dhw' if water_minutes else 'heat' if energy>.02*dt else 'off',
-                            'room':r,'room1':room1,'room2':room2,'water':w,
+                            'room':r+sum(extra_warmth)/2,'room1':room1,'room2':room2,'water':w,
                             'compressor_kw':(energy-extra_energy)/dt,'inline_kw':extra_energy/dt,
                             'hz':hz,'degree_minutes':dm,'required_supply':required,
                             'supply':supply,'coldest_room':min_room})
@@ -440,7 +468,8 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                     if balancing:
                         command['capacity_balance'] = True
                     candidates.append(State(r,w,supply,heat,stored,dm,running,charging,pending,offset,mode,
-                        cost,penalty,auxiliary_energy,miss,previous,command,pieces,completed_day=completed_day,violation=violation,room_delta=room_delta,comfort_risk=comfort_risk,offset_direction=(1. if offset>previous.offset else -1.) if offset!=previous.offset else previous.offset_direction,offset_changed=cursor if offset!=previous.offset else previous.offset_changed))
+                        cost,penalty,auxiliary_energy,miss,previous,command,pieces,completed_day=completed_day,violation=violation,room_delta=room_delta,comfort_risk=comfort_risk,offset_direction=(1. if offset>previous.offset else -1.) if offset!=previous.offset else previous.offset_direction,offset_changed=cursor if offset!=previous.offset else previous.offset_changed,
+                        temporary_warmth=extra_warmth))
         rank=lambda n:(n.violation,n.shortfall+deadline_risk(n),n.cost+terminal(n)+COMFORT_RISK_PRICE*n.comfort_risk,n.aux,n.penalty)
         candidates.sort(key=rank)
         diverse={}
@@ -485,7 +514,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
     reason=('Recovering comfort and reserves' if recovery else 'Preparing hot water in a planned charging window' if current['dhw_mode']=='Normal'
             else 'Balancing electricity price, stored heat and indoor comfort')
     return {'status':'Adaptive schedule','planner':'joint','message':reason,'steps':output,'commands':commands,
-        'model':m,'initial_room':room,'initial_water':water,'horizon_end':end,'model_cost':best.cost,
+        'model':m,'initial_room':initial_room,'initial_water':water,'horizon_end':end,'model_cost':best.cost,
         'inline_kwh':best.aux,'compressor_only':best.aux<.01,'dhw_auxiliary_uncertain':aux_limit>0,'recovery_plan':recovery,'constraint_violation_score':best.violation,
         'dhw_deadline_shortfall_c':best.shortfall,'emitter':calibration,
         'planning':{'defer_until':strategy.until if isinstance(strategy,DeferHeat) else None,'strategy':'beam' if strategy is None else ('defer-bridge' if strategy.bridge else 'defer')+' until '+str(int(strategy.until)) if isinstance(strategy,DeferHeat) else 'price-aware '+str(strategy),'expanded':expanded,'command_period_seconds':COMMAND_SECONDS,'command_not_before':earliest,

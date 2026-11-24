@@ -1,6 +1,7 @@
 """Control policy. No Home Assistant imports or cloud access."""
 import math
 from .coordination import committed_offset, sustaining_supply_target
+from .temporary_heat import NO_HEAT, cooler_room_needs_heat, limit_offset_drop
 
 C1 = 'number.vp_heating_offset_climate_system_1'
 C2 = 'number.vp_heating_offset_climate_system_2'
@@ -99,7 +100,7 @@ def capacity_balance(states, now, room_min, room_max, response, compressor_heat_
 
 
 def calculate(states, now, hour, persistent_shortfall=False, control=None, options=None,
-              response=None, compressor_heat_kw=4.2, recovery_offset=None):
+              response=None, compressor_heat_kw=4.2, recovery_offset=None, temporary_heat=NO_HEAT):
     """Return bounded setting requests; release negative coasting if inputs fail."""
     if not all(fresh(states.get(e), now) and number(states[e].state) is not None for e in REQUIRED_READINGS):
         return release_coast(states,now)
@@ -151,6 +152,15 @@ def calculate(states, now, hour, persistent_shortfall=False, control=None, optio
     heating = states.get(PRIORITY) and states[PRIORITY].state == 'Heating'
     water_valid = all(fresh(states.get(e), now) for e in (SUPPLY, REQUIRED, PRIORITY))
     water_valid = water_valid and value(SUPPLY) is not None and value(REQUIRED) is not None
+    planned_offset = next1
+    if (recovery_offset is None and next1 < current1 and heating and water_valid
+            and (value('sensor.vp_current_compressor_frequency') or 0) > 0
+            and fresh(states.get('sensor.vp_current_compressor_frequency'), now)
+            and minimum is not None and cooler_room_needs_heat((r1, r2), temporary_heat, minimum)):
+        gain = number((response or {}).get('offset_gain')) or 2.5
+        max_diff = number((options or {}).get('compressor_max_supply_diff_c')) or 10.
+        next1 = limit_offset_drop(next1, current1, value(SUPPLY), value(REQUIRED), gain, max_diff,
+                              offset_levels(primary))
     shortfall = bool(heating and water_valid and value(SUPPLY) < value(REQUIRED)-2)
     secondary_warmer = r2 > r1
     secondary=states.get(C2_REQUIRED)
@@ -179,7 +189,7 @@ def calculate(states, now, hour, persistent_shortfall=False, control=None, optio
             if lo is not None and hi is not None and lo <= proposed <= hi and abs(number(state.state)-proposed) > .01:
                 writes.append((entity, proposed))
     return {'targets': [target1, target2], 'writes': writes, 'shortfall': shortfall,
-            'capacity_balance': balance, 'offset_c1': next1}
+            'capacity_balance': balance, 'offset_c1': next1, 'temporary_heat_trim': next1 != planned_offset}
 
 
 def restore_dhw(states):

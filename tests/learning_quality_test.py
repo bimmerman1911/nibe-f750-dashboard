@@ -116,4 +116,38 @@ class QualityTests(unittest.TestCase):
             saved.pop(key)
         self.assertTrue(adaptive.ThermalLearner().restore(saved))
 
+    def test_fireplace_trace_confirms_only_after_two_readings_and_protects_learning(self):
+        learner = adaptive.ThermalLearner({'thermal_capacity_kwh_per_k': 16.})
+        downstairs_reports = {0: 19., 15: 19.5, 25: 20.}
+        upstairs_reports = {0: 19.3, 13: 19.4, 28: 19.7}
+        for minute in range(31):
+            at = BASE + minute * 60
+            snapshot = states_at(at, outdoor=-.4, q=4.2 * 78 / 94)
+            for entity, reports in ((engine.ROOM1, upstairs_reports), (engine.ROOM2, downstairs_reports)):
+                report = max(r for r in reports if r <= minute)
+                snapshot[entity].state = str(reports[report])
+                snapshot[entity].last_reported = datetime.fromtimestamp(BASE + report * 60, timezone.utc)
+            learner.update(snapshot, at, 16)
+            if minute == 15:
+                self.assertEqual(learner.temporary_heat.active, (False, False))
+                self.assertTrue(learner.temporary_heat.learning_hold)
+            if minute == 25:
+                self.assertEqual(learner.temporary_heat.active, (False, True))
+        self.assertEqual(learner.count, 0)
+        self.assertGreater(learner.parameters()['initial_heat_kw'], 0.)
+        self.assertGreater(learner.parameters()['temporary_heat'][1][0], .5)
+
+    def test_normal_warming_and_an_isolated_sensor_jump_do_not_activate(self):
+        learner = adaptive.ThermalLearner()
+        for minute in range(91):
+            at = BASE + minute * 60
+            snapshot = states_at(at, room=20. + minute / 60 * .2, q=3., outdoor=5.)
+            if minute == 32:
+                snapshot[engine.ROOM2].state = '20.6'
+            learner.update(snapshot, at, 12)
+            self.assertEqual(learner.temporary_heat.active, (False, False))
+            if minute == 32:
+                self.assertTrue(learner.temporary_heat.learning_hold)
+        self.assertGreater(learner.count, 0)
+
 if __name__=='__main__':unittest.main()
