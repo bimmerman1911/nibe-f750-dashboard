@@ -99,7 +99,7 @@ def capacity_balance(states, now, room_min, room_max, response, compressor_heat_
 
 
 def calculate(states, now, hour, persistent_shortfall=False, control=None, options=None,
-              response=None, compressor_heat_kw=4.2):
+              response=None, compressor_heat_kw=4.2, recovery_offset=None):
     """Return bounded setting requests; release negative coasting if inputs fail."""
     if not all(fresh(states.get(e), now) and number(states[e].state) is not None for e in REQUIRED_READINGS):
         return release_coast(states,now)
@@ -131,9 +131,11 @@ def calculate(states, now, hour, persistent_shortfall=False, control=None, optio
     minimum = number((control or {}).get('room_min_c', (options or {}).get('room_min_c', 19.)))
     maximum = number((control or {}).get('room_max_c', maximum))
     balance = None
-    if minimum is not None and maximum is not None:
+    if recovery_offset is None and minimum is not None and maximum is not None:
         balance = capacity_balance(states, now, minimum, maximum, response, compressor_heat_kw)
-    if balance:
+    if recovery_offset is not None:
+        next1 = recovery_offset
+    elif balance:
         next1 = balance['offset']
     elif (control or {}).get('confirm_capacity_balance'):
         # The planned trim was based on observed saturation. If that evidence

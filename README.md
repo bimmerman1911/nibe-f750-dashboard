@@ -23,6 +23,12 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Recovery from a sudden degree-minute reset — v0.31.3
+
+While space heating is running, Smart Control checks for jumps from at least 120 degree minutes below zero to within 20 of zero that are too fast to explain from the C1 supply temperatures. It keeps the pre-jump balance as a temporary recovery target. With room to heat, it raises or holds the C1 offset at the next permitted write until the pump reports that balance again. It then refreshes the normal plan.
+
+Intentional coasts are excluded. Recovery waits during hot-water charging, defrost or a gap in live readings, and ends at the configured room ceiling or after two hours. The F750 still owns degree minutes and compressor operation. Recovery uses the existing myUplink write budget and the latest event is available in integration diagnostics.
+
 ## Compressor stop after a C1 target drop — v0.31.2
 
 The forecast now models the F750 resetting degree minutes and stopping space heating when the measured supply exceeds the C1 target by more than **max diff compressor**. Smart Control uses the factory 10°C value by default. If your F750 uses a different value in menu 5.1.3, enter it as **Compressor stop temperature difference** in the integration options. [NIBE F750 installer manual](https://www.nibe.eu/assets/documents/19551/331467-4.pdf)

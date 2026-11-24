@@ -10,8 +10,10 @@ from homeassistant.util import dt as dt_util
 from .adaptive import ThermalLearner
 from .offset import OffsetLearner
 from .accounting import Accounting
+from .degree_recovery import DegreeMinuteRecovery
+from .predictive import DEFAULTS
 from .supervisor import request as adaptive_request
-from .engine import restore_dhw, calculate, fresh, number, SUPPLY, REQUIRED, PRIORITY, ROOM1, ROOM2, TELEMETRY
+from .engine import restore_dhw, calculate, fresh, number, C1, SUPPLY, REQUIRED, PRIORITY, ROOM1, ROOM2, TELEMETRY
 from .inline import (Approval, CAP_ENTITY, EVENT, OFFER_LEAD, MIN_LEAD, START_GRACE,
                      WRITE_INTERVAL, power_option, supports_window)
 
@@ -60,6 +62,8 @@ class Controller:
         self.data['inline_restore'] = False
         self.data['inline_zero_requested'] = None
         self.data['inline_request'] = None
+        self.degree_recovery = DegreeMinuteRecovery()
+        self.data['degree_minute_recovery'] = None
 
     async def async_start(self):
         self.accounting.restore(await self.accounting_store.async_load())
@@ -79,6 +83,7 @@ class Controller:
         # Reject corrupt persistent gates rather than silently resetting a budget.
         if type(self.data['enabled']) is not bool or type(self.data['release_dhw']) is not bool or any(number(self.data[k]) is None for k in ('last_cycle', 'last_attempt','c1_direction','c1_changed')) or self.data['c1_direction'] not in (-1.,0.,1.) or self.data['c1_changed']<0:
             raise ValueError('Invalid persisted controller state')
+        self.degree_recovery.restore(self.data['degree_minute_recovery'])
         if self.inline_service:
             if self.data['enabled']:
                 self.inline.restore(self.data['inline_request'], self.inline_service, self.clock())
@@ -139,6 +144,8 @@ class Controller:
                 self.inline.clear()
                 self.inline_active_until = None
                 self.data['inline_request'] = self.inline.dump(self.inline_service)
+                if self.degree_recovery.finish('Paused', self.clock()):
+                    self.data['degree_minute_recovery'] = self.degree_recovery.event
             await self.store.async_save(dict(self.data))
         await self.async_tick()
 
@@ -191,6 +198,13 @@ class Controller:
         if self.hass.services.has_service('script', 'nibe_smart_control_cycle'):
             self.status = 'Legacy backend detected'
             return
+        options = getattr(self.predictor, 'options', {}) if self.predictor else {}
+        bounds = {k: options.get(k, DEFAULTS[k]) for k in ('room_min_c', 'room_target_c', 'room_max_c')}
+        if self.degree_recovery.observe(states, now, self.data['enabled'], self.control.get('action'), bounds['room_max_c']):
+            self.data['degree_minute_recovery'] = self.degree_recovery.event
+            await self.store.async_save(dict(self.data))
+            if self.predictor and not self.degree_recovery.active:
+                self.predictor.last_refresh = None
         hold_inline_writes = await self._inline_tick(states, now)
         if now-self.last_sample >= 300:
             self.telemetry = {e: {'value': states[e].state if e in states else 'unknown',
@@ -263,6 +277,7 @@ class Controller:
                 self.short_since = now
         else:
             self.short_since = None
+        recovery_offset = None
         if not self.data['enabled']:
             native_dhw = states.get('select.vp_comfort_mode')
             if self.data['release_dhw'] and native_dhw and native_dhw.state in ('Normal','Lux'):
@@ -277,18 +292,18 @@ class Controller:
             if chosen is not None and chosen['dhw_morning_override']!=self.data['dhw_morning_pending']:
                 self.data['dhw_morning_pending']=chosen['dhw_morning_override']
                 await self.store.async_save(dict(self.data))
-            from .predictive import DEFAULTS
-            options=getattr(self.predictor,'options',{}) if self.predictor else {}
-            bounds={k:options.get(k,DEFAULTS[k]) for k in ('room_min_c','room_target_c','room_max_c')}
             fallback_reason=self.forecast.get('message') or 'Prices/weather unavailable; using temperature control.'
             if chosen is None and self.forecast.get('steps'):
                 fallback_reason='The current plan cannot be applied: it is stale, outside its command interval, or required live readings are unavailable.'
             self.control = {**bounds,**(chosen or {'mode':'Thermostat fallback', 'reason':fallback_reason})}
             if chosen is not None:
                 chosen.update({**bounds,'c1_transition':{'direction':self.data['c1_direction'],'time':self.data['c1_changed']}})
+            response = self.offset_learner.parameters()
+            recovery_offset = self.degree_recovery.offset(states, now, bounds['room_max_c'], number(response.get('offset_gain')))
             result = calculate(states, now, dt_util.now().hour,
                 self.short_since is not None and now-self.short_since >= 900, control=chosen,options=options,
-                response=self.offset_learner.parameters(), compressor_heat_kw=self.learner.prior['compressor_heat_kw'])
+                response=response, compressor_heat_kw=self.learner.prior['compressor_heat_kw'],
+                recovery_offset=recovery_offset)
             if result is None:
                 result = {'targets':[], 'writes':restore_dhw(states)}
                 self.status = 'Waiting for readings'
@@ -296,7 +311,13 @@ class Controller:
                 self.status = 'Waiting for readings' if not result['targets'] else 'Write failed' if self.write_failed else 'Running'
             self.targets = result['targets']
             balance = result.get('capacity_balance')
-            if balance and not self.control.get('locked'):
+            if self.degree_recovery.active:
+                target_dm = self.degree_recovery.event['target_dm']
+                self.control['reason'] = f'Rebuilding heating demand to {target_dm:g} degree minutes after a sudden reset.'
+                self.control['degree_minute_recovery'] = self.degree_recovery.event
+                if recovery_offset is not None:
+                    self.control['offset_c1'] = recovery_offset
+            elif balance and not self.control.get('locked'):
                 self.control['capacity_balance'] = balance
                 self.control['offset_c1'] = balance['offset']
                 self.control['reason'] = 'Matching the primary target to available heat while downstairs recovers'
@@ -358,11 +379,14 @@ class Controller:
                     'set_value' if domain == 'number' else 'select_option',
                     {'entity_id': entity, 'value' if domain == 'number' else 'option': value}, blocking=True)
                 attempts[-1]['success'] = True
-                if entity=='number.vp_heating_offset_climate_system_1':
+                if entity == C1:
                     before=number(states[entity].state)
                     if before is not None and abs(value-before)>.01:
-                        self.data['c1_direction']=1. if value>before else -1.
-                        self.data['c1_changed']=self.clock()
+                        if recovery_offset is None:
+                            self.data['c1_direction'] = 1. if value > before else -1.
+                            self.data['c1_changed'] = self.clock()
+                        else:
+                            self.data['c1_direction'] = self.data['c1_changed'] = 0.
             except Exception:
                 self.status = 'Write failed'
                 failed = True
