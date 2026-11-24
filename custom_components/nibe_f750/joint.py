@@ -171,6 +171,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
         m[key]=value
     for key,lo,hi in (('heat_loss_kw_per_k',.001,15),('thermal_capacity_kwh_per_k',1,200),
                       ('compressor_heat_kw',.1,20),('dhw_heat_kw',.1,20),('tank_capacity_kwh_per_k',.01,5),
+                      ('compressor_max_supply_diff_c',1,25),
                       ('room_min_c',5,35),('room_target_c',5,35),('room_max_c',5,35),
                       ('tank_min_c',10,80),('tank_target_c',10,80),('tank_max_c',20,80)):
         numeric(key,lo,hi)
@@ -220,6 +221,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
     calibration=emitter_estimate({**sample,'time':sample.get('measurement_time',sample['time'])},room,m,emitter)
     conductance=calibration['conductance_kw_per_k']
     theta=response.get('theta',[.35,.25,.75,0.])
+    max_supply_diff = m['compressor_max_supply_diff_c']
     gain=response.get('offset_gain',2.5)
     if not isinstance(gain,(int,float)) or not math.isfinite(gain) or not 0<gain<=10:raise ValueError('Invalid native offset gain')
     uncertainty=min(.25,max(.05,m.get('response_uncertainty_c',.2)*.5),max(0,(m['room_max_c']-m['room_min_c'])/4))
@@ -365,9 +367,13 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                             observed_aux=min(allowed_aux,sample['inline']) if sample['mode']=='Hot water' else 0.
                             qw,fraction,water_aux,charging=charge(w,mode!='Economy',charging,h,m,observed_aux,draw)
                             dhw=fraction>0
-                            heat=response_step(heat,required-supply,dm,h,theta,cap+allowed_aux)
                             if dm>=0:running=False
                             elif dm<=response.get('start_dm',-60):running=True
+                            if running and not dhw and supply - required > max_supply_diff:
+                                # F750 menu 5.1.3 resets the backlog and stops heating.
+                                dm = 0.
+                                running = False
+                            heat=response_step(heat,required-supply,dm,h,theta,cap+allowed_aux)
                             compressor=0. if dhw or not running else max(cap*min_hz/max_hz,min(cap,heat))
                             extra=0. if dhw or dm>response.get('aux_dm',-700) else min(allowed_aux,max(0,heat-cap))
                             q=compressor+extra

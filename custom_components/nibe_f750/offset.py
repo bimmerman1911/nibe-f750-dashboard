@@ -7,7 +7,7 @@ import math
 from statistics import median
 from .engine import C1, REQUIRED, SUPPLY, PRIORITY, fresh, number, offset_levels
 from .adaptive import bounded, filtered_heat
-from .predictive import thermal_step
+from .predictive import DEFAULTS, thermal_step
 from .dhw import policy, charge
 from .native import emitter_estimate, primary_degree_minutes_step
 from .air_limit import AirLimit
@@ -182,6 +182,7 @@ def plan_offsets(result,states,now,response,min_hz,max_hz,budget=None):
     if not levels or not levels[0]<=sample['offset']<=levels[-1]:
         return None
     gain=response.get('offset_gain',2.5);theta=response.get('theta',[.35,.25,.75,0.])
+    max_supply_diff = m.get('compressor_max_supply_diff_c', DEFAULTS['compressor_max_supply_diff_c'])
     cap=m['compressor_heat_kw'];lo=m['room_min_c'];hi=m['room_max_c'];target=m['room_target_c']
     room=result['initial_room'];water=result['initial_water']
     room_ids=('sensor.ovanvaning_temperature','sensor.nedervaning_temperature')
@@ -220,13 +221,16 @@ def plan_offsets(result,states,now,response,min_hz,max_hz,budget=None):
                     water_heat,water_fraction,water_inline,charging=charge(w,normal,charging,h,m,slot['inline_kw'],draw)
                     dhw=water_fraction>0
                     any_dhw=any_dhw or dhw
-                    demand=max(0.,sum(a*b for a,b in zip(theta,[required-supply,-dm/100,heat,1.])))
-                    demand=min(cap+m.get('auxiliary_limit_kw',0),demand)
-                    heat+=(demand-heat)*(1-math.exp(-h/.25))
                     if dm>=0:
                         running=False
                     elif dm<=response.get('start_dm',-60):
                         running=True
+                    if running and not dhw and supply - required > max_supply_diff:
+                        dm = 0.
+                        running = False
+                    demand=max(0.,sum(a*b for a,b in zip(theta,[required-supply,-dm/100,heat,1.])))
+                    demand=min(cap+m.get('auxiliary_limit_kw',0),demand)
+                    heat+=(demand-heat)*(1-math.exp(-h/.25))
                     compressor=0. if dhw or not running else min(cap,heat)
                     if compressor>0:
                         compressor=max(compressor,cap*min_hz/max_hz)

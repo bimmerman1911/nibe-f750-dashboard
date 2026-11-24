@@ -23,8 +23,14 @@ def forecast():
 
 class Tests(unittest.TestCase):
     def test_degree_backlog_changes_predictions_and_offsets_respect_native_range(self):
-        a=module.plan_offsets(forecast(),states(dm=-50),BASE,{},20,84)
-        b=module.plan_offsets(forecast(),states(dm=-900),BASE,{},20,84)
+        low_backlog = states(dm=-50)
+        high_backlog = states(dm=-900)
+        for readings in (low_backlog, high_backlog):
+            # Keep the initial choices below the native overshoot limit so this
+            # test measures the influence of a backlog that has not been reset.
+            readings[engine.C1].attributes['min'] = -3
+        a=module.plan_offsets(forecast(),low_backlog,BASE,{},20,84)
+        b=module.plan_offsets(forecast(),high_backlog,BASE,{},20,84)
         self.assertGreater(abs(a['steps'][0]['offset']),1)
         self.assertNotEqual([s['compressor_kw'] for s in a['steps']],[s['compressor_kw'] for s in b['steps']])
         for result in (a,b):
@@ -34,7 +40,7 @@ class Tests(unittest.TestCase):
         changed=forecast()
         for s in changed['steps']:
             s['price']=.2 if s['start']<BASE+7200 else 3
-        c=module.plan_offsets(changed,states(dm=-50),BASE,{},20,84)
+        c=module.plan_offsets(changed,low_backlog,BASE,{},20,84)
         self.assertNotEqual([s['offset'] for s in a['steps']],[s['offset'] for s in c['steps']])
 
     def test_direct_offset_not_binary_temperature_mapping_and_missing_dm(self):

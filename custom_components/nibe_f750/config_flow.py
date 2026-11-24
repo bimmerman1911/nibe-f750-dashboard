@@ -47,7 +47,7 @@ class OptionsFlow(config_entries.OptionsFlow):
         fields[vol.Optional('inline_max_kw', default=self._entry.options.get('inline_max_kw', 6.5))] = vol.In(
             [n / 2 for n in range(1, 14)])
         limits={'heat_loss_kw_per_k':(.01,1), 'thermal_capacity_kwh_per_k':(2,100),
-                'compressor_heat_kw':(1,10),'dhw_heat_kw':(1,10),
+                'compressor_heat_kw':(1,10),'dhw_heat_kw':(1,10),'compressor_max_supply_diff_c':(1,25),
                 'room_min_c':(16,23),'room_target_c':(17,24),'room_max_c':(18,25),
                 'tank_min_c':(35,50),'tank_target_c':(40,55),'tank_max_c':(46,60)}
         for key,(low,high) in limits.items():

@@ -29,6 +29,7 @@
           "heat_loss_kw_per_k": "Building heat loss (kW/K)",
           "thermal_capacity_kwh_per_k": "Building thermal storage (kWh/K)",
           "compressor_heat_kw": "Compressor heating capacity (kW)",
+          "compressor_max_supply_diff_c": "Compressor stop temperature difference (°C)",
           "dhw_heat_kw": "DHW heating capacity (kW)",
           "room_min_c": "Minimum room temperature (\u00b0C)",
           "room_target_c": "Normal room target (\u00b0C)",
@@ -40,7 +41,8 @@
           "inline_max_kw": "Maximum approved inline power (kW)"
         },
         "data_description": {
-          "inline_notify_service": "Choosing a phone lets Smart Control return the heater cap to 0 kW outside approved windows. Enable additional heat in the F750\u2019s native settings if you want the pump to use an approved cap. Leave Off for native control."
+          "inline_notify_service": "Choosing a phone lets Smart Control return the heater cap to 0 kW outside approved windows. Enable additional heat in the F750\u2019s native settings if you want the pump to use an approved cap. Leave Off for native control.",
+          "compressor_max_supply_diff_c": "Match max diff compressor in F750 menu 5.1.3. The factory setting is 10 °C."
         }
       }
     },

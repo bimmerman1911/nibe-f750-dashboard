@@ -23,6 +23,10 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Compressor stop after a C1 target drop — v0.31.2
+
+The forecast now models the F750 resetting degree minutes and stopping space heating when the measured supply exceeds the C1 target by more than **max diff compressor**. Smart Control uses the factory 10°C value by default. If your F750 uses a different value in menu 5.1.3, enter it as **Compressor stop temperature difference** in the integration options. [NIBE F750 installer manual](https://www.nibe.eu/assets/documents/19551/331467-4.pdf)
+
 ## Degree minutes during hot-water charging — v0.31.1
 
 The planner now continues updating degree minutes from C1 supply and its target during hot-water charging. It carries that balance into the forecast for when the compressor can resume space heating.

@@ -71,6 +71,29 @@ class PrimaryCircuitTests(unittest.TestCase):
         self.assertEqual(low_target[1]['action'], 'off')
         self.assertEqual(high_target[1]['action'], 'heat')
 
+    def test_native_supply_overshoot_stops_heating_even_with_large_degree_minute_deficit(self):
+        states = readings(room=19.9, tank=52.)
+        states[engine.C1].state = '10'
+        states[engine.REQUIRED].state = '50.6'
+        states[engine.SUPPLY].state = '51.6'
+        states['sensor.vp_degree_minutes_2'].state = '-565'
+        slots = timeline(count=1, price=lambda _: 2.45)
+
+        def simulate(offset, model=MODEL):
+            commands = [{'start': NOW, 'end': slots[-1]['end'], 'offset': offset, 'dhw_mode': 'Economy'}]
+            return joint._search(slots, states, NOW, model, {'offset_gain': 1.5},
+                                 strategy='previous', incumbent={'commands': commands})['steps'][0]
+
+        cut = simulate(-10)
+        self.assertEqual(cut['action'], 'off')
+        self.assertEqual(cut['compressor_kw'], 0.)
+        self.assertGreaterEqual(cut['degree_minutes'], 0.)
+        trim = simulate(5)
+        self.assertEqual(trim['action'], 'heat')
+        self.assertLess(trim['degree_minutes'], 0.)
+        stricter = simulate(5, {**MODEL, 'compressor_max_supply_diff_c': 7.})
+        self.assertEqual(stricter['action'], 'off')
+
     def test_secondary_load_can_indirectly_change_primary_degree_minutes(self):
         # Holding C1's target fixed, a lower actual primary supply still matters.
         self.assertGreater(native.primary_degree_minutes_step(-50,25.7,20,.1),-50)

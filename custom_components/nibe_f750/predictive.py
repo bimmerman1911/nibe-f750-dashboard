@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from .dhw import charge
 
 DEFAULTS = {'heat_loss_kw_per_k': .10, 'thermal_capacity_kwh_per_k': 9.,
-            'compressor_heat_kw': 4.2, 'dhw_heat_kw': 3.6,
+            'compressor_heat_kw': 4.2, 'dhw_heat_kw': 3.6, 'compressor_max_supply_diff_c': 10.,
             'room_min_c': 19., 'room_max_c': 20.5, 'room_target_c': 20.,
             'tank_min_c': 42., 'tank_max_c': 52., 'tank_target_c': 48.,
             'tank_capacity_kwh_per_k': .209, 'dhw_draw_kw': .15}
