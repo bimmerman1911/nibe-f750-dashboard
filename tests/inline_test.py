@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
+from zoneinfo import ZoneInfo
 
 from integration_test import Fixture, Store, engine, load, runtime
 from joint_scenarios_test import NOW, MODEL, joint, readings, timeline
@@ -12,6 +13,16 @@ work = load('work')
 
 
 class WindowTests(unittest.TestCase):
+    def test_night_request_timing_uses_local_clock_across_dst(self):
+        zone = ZoneInfo('Europe/Stockholm')
+        def at(value):
+            return datetime.fromisoformat(value).replace(tzinfo=zone).timestamp()
+        start = at('2026-03-29T06:30')
+        for value, expected in (('2026-03-28T21:44', False), ('2026-03-28T21:45', True),
+                                ('2026-03-28T22:00', False), ('2026-03-29T05:59', False),
+                                ('2026-03-29T06:00', True)):
+            self.assertEqual(inline.request_due(at(value), start, zone), expected, value)
+
     def test_compares_cheapest_usable_windows_and_checks_actual_native_draw(self):
         now = NOW
         slots = timeline(now, count=28, price=lambda i: .3 if 4 <= i <= 5 else 2.)
@@ -201,6 +212,62 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.notifications, [])
         await self.controller._offer_inline(self.later['start']-3600)
         self.assertEqual(len(self.notifications), 1)
+
+    async def test_night_request_covers_the_plan_and_decline_keeps_the_estimate(self):
+        zone = self.controller.accounting.zone
+        def at(value):
+            return datetime.fromisoformat(value).replace(tzinfo=zone).timestamp()
+        now = at('2026-11-09T21:45')
+        first = {**self.offer, 'start': at('2026-11-10T02:00'), 'end': at('2026-11-10T02:16')}
+        second = {**self.later, 'start': at('2026-11-10T06:30'), 'end': at('2026-11-10T06:46')}
+        plan = {'windows': [first, second], 'horizon_end': now+43200}
+        self.hass.time = now
+        self.publish(now, plan)
+        actions = await self.ask()
+        self.assertIn('02:00', self.notifications[0]['message'])
+        self.assertIn('06:30', self.notifications[0]['message'])
+        await self.answer(actions[1]['action'])
+        self.assertEqual(self.controller._inline_status()['state'], 'Not approved')
+        self.publish(first['start']-60, plan)
+        await self.tick(first['start'])
+        self.assertEqual(self.controller._latest_inline_plan(first['start']), plan)
+        self.assertEqual(self.cap_writes, [])
+        self.publish(second['start']-1800, plan)
+        await self.controller._offer_inline(second['start']-1800)
+        self.assertEqual(len(self.notifications), 1)
+
+    async def test_new_need_during_quiet_hours_only_offers_still_future_windows_at_six(self):
+        zone = self.controller.accounting.zone
+        def at(value):
+            return datetime.fromisoformat('2026-11-10T'+value).replace(tzinfo=zone).timestamp()
+        first = {**self.offer, 'start': at('05:30'), 'end': at('05:46')}
+        second = {**self.later, 'start': at('06:30'), 'end': at('06:46')}
+        plan = {'windows': [first, second], 'horizon_end': at('15:30')}
+        self.hass.time = at('05:00')
+        self.publish(self.hass.time, plan)
+        await self.controller._offer_inline(self.hass.time)
+        self.assertEqual(self.notifications, [])
+        await self.tick(first['start'])
+        self.assertEqual(self.cap_writes, [])
+        self.hass.time = at('06:00')
+        self.publish(self.hass.time, plan)
+        await self.ask()
+        self.assertEqual(self.controller.inline.offer['windows'], [second])
+
+    async def test_persistence_that_crosses_ten_does_not_send(self):
+        zone = self.controller.accounting.zone
+        now = datetime(2026, 11, 9, 21, 59, 50, tzinfo=zone).timestamp()
+        self.hass.time = now
+        window = {**self.offer, 'start': now+7200, 'end': now+8160}
+        self.publish(now, {'windows': [window], 'horizon_end': now+43200})
+        save = self.controller._save_inline_request
+        async def delay_save():
+            self.hass.time += 15
+            await save()
+        self.controller._save_inline_request = delay_save
+        await self.controller._offer_inline(now)
+        self.assertEqual(self.notifications, [])
+        self.assertIsNone(Store.saved['inline_request']['offer'])
 
     async def test_restart_preserves_the_phone_reply_for_the_remaining_windows(self):
         actions = await self.ask()

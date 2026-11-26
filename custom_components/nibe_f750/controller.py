@@ -14,8 +14,8 @@ from .degree_recovery import DegreeMinuteRecovery
 from .predictive import DEFAULTS
 from .supervisor import request as adaptive_request
 from .engine import restore_dhw, calculate, fresh, number, C1, SUPPLY, REQUIRED, PRIORITY, ROOM1, ROOM2, TELEMETRY
-from .inline import (Approval, CAP_ENTITY, EVENT, OFFER_LEAD, MIN_LEAD, START_GRACE,
-                     WRITE_INTERVAL, power_option, supports_window)
+from .inline import (Approval, CAP_ENTITY, EVENT, MIN_LEAD, START_GRACE,
+                     WRITE_INTERVAL, power_option, request_due, supports_window)
 
 _LOGGER = logging.getLogger(__name__)
 DOMAIN = 'nibe_f750'
@@ -234,7 +234,7 @@ class Controller:
                 self.predictor.offset_response = self.offset_learner.parameters()
                 self.predictor.air_limit = self.offset_learner.air_limit
                 self.predictor.inline_offer = self.inline.offer
-                self.predictor.inline_not_before = max(self.inline.closed_until, self.inline.used_until)
+                self.predictor.inline_used_until = self.inline.used_until
                 self.predictor.command_not_before = max(now,float(self.data['last_cycle'])+902,float(self.data['last_attempt'])+902)
                 self.forecast = await asyncio.wait_for(self.predictor.async_update(states, now), timeout=30)
                 generated = self.forecast.get('generated_at')
@@ -457,13 +457,18 @@ class Controller:
         plan = self._latest_inline_plan(now)
         if self.inline.offer or not plan:
             return
-        start = plan['windows'][0]['start']
-        if not MIN_LEAD <= start - now <= OFFER_LEAD or start < self.inline.closed_until:
+        windows = [w for w in plan['windows'] if w['start'] >= max(now + MIN_LEAD, self.inline.closed_until)]
+        zone = self.accounting.zone
+        if not windows or not request_due(now, windows[0]['start'], zone):
             return
         if not self.hass.services.has_service('notify', self.inline_service):
             return
-        notification = self.inline.notification(plan, self.accounting.zone)
+        notification = self.inline.notification({'windows': windows, 'horizon_end': plan['horizon_end']}, zone)
         await self._save_inline_request()
+        if not self.data['enabled'] or self.stopping or not request_due(max(now, self.clock()), windows[0]['start'], zone):
+            self.inline.clear()
+            await self._save_inline_request()
+            return
         try:
             await self.hass.services.async_call('notify', self.inline_service, notification, blocking=True)
         except Exception:

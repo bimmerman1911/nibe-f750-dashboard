@@ -179,6 +179,25 @@ try {
   assert.match(await card.locator('[data-inline-approval]').textContent(),/Awaiting approval.*through/);
   assert.equal((await card.locator('[data-inline-windows]').textContent()).match(/up to 6[.,]5 kW/g)?.length,2);
   assert.match(await card.locator('.prediction').textContent(),/Proposed inline heat 2[.,]2 kWh/);
+  const basePower = await card.locator('[data-series="predicted"]').getAttribute('d');
+  await page.evaluate(()=>{
+    const now=Date.now()/1000;
+    const forecast=window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast;
+    window.notification=window.jointControl.inline_approval;
+    forecast.inline_plan={...window.notification,activity:[{start:now+3600,end:now+3690,action:'heat',inline_kw:4}]};
+    window.jointControl.inline_approval={state:'Not approved',horizon_end:now+43200};
+    document.querySelector('nibe-f750-smart-card').render();
+  });
+  assert.match(await card.locator('[data-inline-approval]').textContent(),/Not approved/);
+  assert.equal((await card.locator('[data-inline-windows]').textContent()).match(/up to 6[.,]5 kW/g)?.length,2);
+  assert.equal(await card.locator('rect[data-inline-estimate]').getAttribute('data-inline-seconds'),'90');
+  assert.equal(await card.locator('rect[data-inline-estimate]').getAttribute('fill'),'#d59a58');
+  assert.equal(await card.locator('[data-series="predicted"]').getAttribute('d'),basePower);
+  await page.evaluate(()=>{
+    window.jointControl.inline_approval=window.notification;
+    window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast.inline_plan=window.notification;
+    document.querySelector('nibe-f750-smart-card').render();
+  });
   await page.evaluate(async()=>{
     const c=document.querySelector('nibe-f750-smart-card'),now=Date.now();
     window.smartHass.callApi=async(method,path)=>{

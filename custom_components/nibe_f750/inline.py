@@ -1,5 +1,5 @@
 """Compare inline permission plans and track one phone approval per horizon."""
-from datetime import datetime
+from datetime import datetime, time, timedelta
 import math
 from secrets import token_hex
 
@@ -16,6 +16,21 @@ OFFER_LEAD = 3600
 MIN_LEAD = 300
 START_GRACE = 90
 WRITE_INTERVAL = 902
+
+
+def request_due(now, start, zone):
+    """Bring requests that would fall in quiet hours forward to 21:45."""
+    local_now = datetime.fromtimestamp(now, zone)
+    if local_now.hour >= 22 or local_now.hour < 6 or start - now < MIN_LEAD:
+        return False
+    due = start - OFFER_LEAD
+    local_due = datetime.fromtimestamp(due, zone)
+    if local_due.hour >= 22 or local_due.hour < 6:
+        evening = local_due.date()
+        if local_due.hour < 6:
+            evening -= timedelta(days=1)
+        due = datetime.combine(evening, time(21, 45), zone).timestamp()
+    return now >= due
 
 
 def power_option(state, kw):
@@ -91,17 +106,26 @@ def improves(before, after):
 
 def describe_plan(windows, prediction, kw, horizon_end):
     runs = []
+    activity = []
     for start, end in windows:
         energy = cost = 0.
+        draw = []
         for step in prediction['steps']:
-            seconds = max(0., min(step['end'], end) - max(step['start'], start))
-            kwh = step['inline_kw'] * seconds / 3600
-            energy += kwh
-            cost += kwh * step['price']
+            if step['inline_kw'] <= 0 or step['end'] <= start or step['start'] >= end:
+                continue
+            for part in step.get('activity', [step]):
+                a, b = max(start, part['start']), min(end, part['end'])
+                power = part['inline_kw']
+                if a < b and power > 0:
+                    kwh = power * (b - a) / 3600
+                    energy += kwh
+                    cost += kwh * step['price']
+                    draw.append({'start': a, 'end': b, 'inline_kw': power, 'action': part.get('action', 'heat')})
         if energy >= .02:
             runs.append({'start': start, 'end': end, 'kw': kw,
                          'estimated_kwh': energy, 'estimated_cost': cost})
-    return {'windows': runs, 'horizon_end': horizon_end} if runs else None
+            activity.extend(draw)
+    return {'windows': runs, 'horizon_end': horizon_end, 'activity': activity} if runs else None
 
 
 def compare_windows(slots, baseline, now, earliest, kw, replay, budget, preferred=None):

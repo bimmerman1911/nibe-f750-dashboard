@@ -76,6 +76,19 @@ class AccountingTests(unittest.TestCase):
         self.assertTrue(all(day['actual']<0 for day in a.days.values()))
         self.assertAlmostEqual(sum(day['seconds'] for day in a.days.values()),120)
 
+    def test_inline_estimate_history_is_separate_from_executable_power(self):
+        a = accounting.Accounting()
+        steps = [{'start': BASE + i*900, 'end': BASE + (i+1)*900, 'compressor_kw': 1.,
+                  'inline_kw': 0., 'price': 2., 'action': 'heat'} for i in range(2)]
+        part = {'start': BASE + 840, 'end': BASE + 960, 'inline_kw': 3., 'action': 'heat'}
+        a.forecast({'steps': steps, 'inline_plan': {'activity': [part]}}, BASE-60)
+        self.assertEqual(a.bins[BASE+900]['inline_estimate'][0]['start'], BASE+900)
+        a.forecast({'steps': steps, 'inline_plan': None}, BASE+120)
+        past, future = a.view(BASE+120)['history']
+        self.assertEqual(past['inline_estimate'], [{**part, 'end': BASE+900}])
+        self.assertEqual(past['predicted_kw'], 1.)
+        self.assertIsNone(future['inline_estimate'])
+
     def test_merge_and_historical_replay(self):
         old={}
         for minute in range(16):

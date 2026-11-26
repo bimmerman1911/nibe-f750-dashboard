@@ -33,6 +33,13 @@ class Accounting:
         return {'version':1,'bins':{str(k):v for k,v in self.bins.items()},'days':self.days,'history_checked':self.history_checked}
 
     def forecast(self, result, now):
+        estimates = {}
+        for part in (result.get('inline_plan') or {}).get('activity', []):
+            start = math.floor(part['start'] / 900) * 900
+            while start < part['end']:
+                estimates.setdefault(start, []).append({**part, 'start': max(part['start'], start),
+                                                        'end': min(part['end'], start + 900)})
+                start += 900
         for s in result.get('steps',[]):
             if any(not isinstance(s.get(k),(int,float)) or not math.isfinite(s[k]) for k in ('start','end','compressor_kw','inline_kw','price')):
                 continue
@@ -44,6 +51,7 @@ class Accounting:
             if start>now or 'predicted_kw' not in row:
                 row.update(predicted_kw=s['compressor_kw']+s['inline_kw'],price=s['price'],
                            inline_kw=s['inline_kw'],action=s['action'],activity=[dict(a) for a in s['activity']] if isinstance(s.get('activity'),list) else None,issued_at=result.get('generated_at',now))
+                row['inline_estimate'] = estimates.get(start)
         self.revision+=1
 
     def observe(self, states, now, learned, forecast):
@@ -172,7 +180,7 @@ class Accounting:
             current=self.bins.get(t,{})
             merged={**historical,**current}
             if t<=cutoff and 'predicted_kw' in historical:
-                for key in ('predicted_kw','inline_kw','issued_at','action','activity'):
+                for key in ('predicted_kw','inline_kw','issued_at','action','activity','inline_estimate'):
                     merged[key]=historical.get(key)
             for key in ('energy','seconds'):
                 if key in historical or key in current:
@@ -195,7 +203,8 @@ class Accounting:
                          'baseline':data['baseline'] if data and data.get('baseline_seconds',0)>=data['seconds']-1e-6 else None,'covered_hours':data['seconds']/3600 if data else 0.})
         history=[{'start':t,'end':t+900,'price':v.get('price'),'predicted_kw':v.get('predicted_kw'),'inline_kw':v.get('inline_kw'),
                   'actual_kw':v['energy']/(v['seconds']/3600) if v.get('seconds') else None,
-                  'action':v.get('action'),'activity':v.get('activity'),'covered_seconds':v.get('seconds',0)}
+                  'action':v.get('action'),'activity':v.get('activity'),'inline_estimate':v.get('inline_estimate'),
+                  'covered_seconds':v.get('seconds',0)}
                  for t,v in sorted(self.bins.items()) if now-44100<=t<=now+43200]
         return {'updated_at':now,'history':history,'week':week,'timezone':str(self.zone),'currency':'SEK',
                 'basis':'Observed power/cost are estimates from compressor frequency/BT12 plus reported inline power. Baseline is a fixed-20°C/Normal-DHW thermal simulation, not a measured saving. Baseline is shown only for fully matched recorded cost intervals; missing history stays blank.'}
