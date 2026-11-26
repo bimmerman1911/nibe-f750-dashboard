@@ -74,4 +74,5 @@ def request(forecast, states, now, model):
         reason=decision['dhw_reason']
     return {'offset_c1':offset,'target_c':round(desired,2),**decision,'action':current['action'],
             'reason':reason,'mode':'Adaptive','generated_at':now,
+            'protect_heating_capacity':bool(current.get('protect_heating_capacity') and max(rooms)<=hi),
             'confirm_capacity_balance':bool(current.get('capacity_balance'))}

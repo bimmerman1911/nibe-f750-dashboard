@@ -7,6 +7,7 @@ from .joint import plan as joint_plan, _search as replay_plan
 from .inline import compare_windows, supports_window, CAP_ENTITY, STATUS_ENTITY
 from .dhw import next_deadline
 from .work import PlanningBudget, ReservedBudget
+from .building import BT1, capacity_at
 from zoneinfo import ZoneInfo
 
 
@@ -83,6 +84,17 @@ class Predictor:
                     tomorrow=[];unpublished=True
                 market=prices(today+tomorrow,'SEK/MWh')
             slots=timeline(market,rows,now,unit)
+            bt1 = states.get(BT1)
+            measured = number(bt1.state) if fresh(bt1, now) else None
+            if measured is not None and not -45 <= measured <= 40:
+                measured = None
+            if measured is not None and slots:
+                # Use the local observation at the start and blend back to
+                # SMHI over the first two hours.
+                discrepancy = measured - slots[0]['outdoor']
+                for slot in slots:
+                    midpoint = (slot['start'] + slot['end']) / 2
+                    slot['outdoor'] += discrepancy * max(0., 1. - (midpoint - now) / 7200)
             required=(ROOM1,ROOM2,'sensor.vp_hot_water_top_bt7','sensor.vp_hot_water_charging_bt6')
             if not all(fresh(states.get(e),now) and number(states[e].state) is not None for e in required):
                 raise ValueError('Fresh room and tank readings are needed for predictions')
@@ -130,6 +142,29 @@ class Predictor:
                 max_hz=model['air_limit']['effective_max_hz']
                 if max_hz is None:raise ValueError('Qualified compressor capacity unavailable; collecting operating history')
                 if max_hz<min_hz:raise ValueError('Estimated evaporator capacity is below the native minimum speed')
+            building = dict(model.get('building_heat_loss', {}))
+            if building:
+                samples = building.pop('capacity_samples', [])
+                flow = model.get('air_limit', {}).get('airflow_m3h')
+                supply_state = states.get('sensor.vp_supply_line_bt61')
+                current_supply = number(supply_state.state) if fresh(supply_state, now) else None
+                for slot in slots:
+                    # Estimate the weather-dependent supply requirement
+                    # around the observed operating point.
+                    supply = max(24., min(55., (current_supply or 35.) + .8 * ((measured if measured is not None else slot['outdoor']) - slot['outdoor'])))
+                    estimate = capacity_at(samples, slot['outdoor'], supply, flow, max_hz)
+                    if estimate:
+                        slot['sustained_heat_kw'] = estimate['heat_kw']
+                        slot['defrost_minutes_per_hour'] = estimate['defrost_minutes_per_hour']
+                    elif (building.get('recent_heating_kw') is not None and measured is not None
+                          and abs(slot['outdoor'] - measured) <= 4):
+                        # A recent near-limit reading is an upper bound based
+                        # on steady heating, pending full-cycle coverage.
+                        slot['sustained_heat_kw'] = building['recent_heating_kw']
+                if 'sustained_heat_kw' in slots[0]:
+                    building['sustained_heat_kw'] = slots[0]['sustained_heat_kw']
+                    building['defrost_minutes_per_hour'] = slots[0].get('defrost_minutes_per_hour')
+                model['building_heat_loss'] = building
             # Pure model evaluation stays off HA's event loop.
             budget=PlanningBudget()
             response=dict(self.offset_response)

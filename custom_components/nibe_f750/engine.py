@@ -122,7 +122,8 @@ def calculate(states, now, hour, persistent_shortfall=False, control=None, optio
         next1=control['offset_c1']
         transition=control.get('c1_transition',{})
         next1=committed_offset(next1,current1,transition.get('direction',0),transition.get('time',0),now,
-            min(r1,r2)<control.get('room_min_c',19.) or max(r1,r2)>control.get('room_max_c',20.5))
+            control.get('protect_heating_capacity') or min(r1,r2)<control.get('room_min_c',19.)
+            or max(r1,r2)>control.get('room_max_c',20.5))
     else:
         error=max(e1,e2)
         next1=max(0.,current1)+min(4.,max(1.,round(3*error))) if error>.3 else current1-1 if e1<-.3 and e2<-.3 else current1

@@ -8,6 +8,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 from .adaptive import ThermalLearner
+from .building import BuildingModel, backfill as backfill_building, reading as building_reading
 from .offset import OffsetLearner
 from .accounting import Accounting
 from .degree_recovery import DegreeMinuteRecovery
@@ -34,6 +35,7 @@ class Controller:
         self.last_accounting_save = 0
         self.air_history_task = None
         self.history_task = None
+        self.building_history_task = None
         self.data = {'enabled': True, 'last_cycle': 0, 'last_attempt': 0, 'c1_direction':0., 'c1_changed':0., 'release_dhw':False,'dhw_morning_pending':False,'dhw_morning_completed_date':None}
         self.status = 'Starting'
         self.targets = []
@@ -51,6 +53,7 @@ class Controller:
         self.last_prediction = None
         self.decision_log = []
         self.learner = ThermalLearner(getattr(predictor,'options',None))
+        self.building = BuildingModel(str(self.accounting.zone))
         self.saved_learning_revision = 0
         self.offset_learner = OffsetLearner()
         self.offset_store = Store(hass,1,DOMAIN+'.offset_response')
@@ -71,6 +74,7 @@ class Controller:
         learning = await self.learning_store.async_load()
         if learning and not self.learner.restore(learning):
             _LOGGER.warning('Invalid adaptive model data; restarting learning from initial parameters')
+        self.building.restore((learning or {}).get('building'))
         if self.predictor:
             history = await self.forecast_store.async_load() or {}
             self.prediction_log = history.get('records', [])[-192:]
@@ -90,6 +94,10 @@ class Controller:
             self.unsubscribe_inline = self.hass.bus.async_listen(EVENT, self._inline_response)
         self.unsubscribe = async_track_time_interval(self.hass, self.async_tick, timedelta(minutes=1))
         await self.async_tick()
+        if (not self.building.history_checked and 'recorder' in getattr(getattr(self.hass, 'config', None), 'components', set())
+                and hasattr(self.hass, 'async_create_background_task')):
+            self.building_history_task = self.hass.async_create_background_task(
+                self.async_backfill_building(), 'NIBE overnight heat and defrost history')
         if ((not self.offset_learner.air_limit.observations or not self.offset_learner.air_limit.last_airflow) and 'recorder' in getattr(getattr(self.hass,'config',None),'components',set()) and hasattr(self.hass,'async_create_background_task')):
             self.air_history_task=self.hass.async_create_background_task(self.async_backfill_air_limit(),'NIBE evaporator calibration history')
         if (not self.accounting.history_checked and 'recorder' in getattr(getattr(self.hass,'config',None),'components',set())
@@ -115,6 +123,21 @@ class Controller:
                 self.notify()
         except Exception:
             _LOGGER.exception('Evaporator history unavailable; calibration continues from live observations')
+
+    async def async_backfill_building(self):
+        building = self.building
+        try:
+            history = await backfill_building(self.hass, self.clock(), str(building.zone))
+            async with self.lock:
+                if self.stopping or self.building is not building:
+                    return
+                building.merge(history)
+                await self.learning_store.async_save({**self.learner.dump(), 'building': building.dump()})
+                if self.predictor:
+                    self.predictor.last_refresh = None
+                self.notify()
+        except Exception:
+            _LOGGER.exception('Building heat history unavailable; learning continues from live observations')
 
     async def async_backfill_accounting(self, cutoff):
         try:
@@ -152,7 +175,9 @@ class Controller:
     async def async_reset_learning(self):
         async with self.lock:
             self.learner = ThermalLearner(getattr(self.predictor,'options',None))
-            await self.learning_store.async_save(self.learner.dump())
+            self.building = BuildingModel(str(self.accounting.zone))
+            self.building.history_checked = True
+            await self.learning_store.async_save({**self.learner.dump(), 'building': self.building.dump()})
             self.saved_learning_revision = 0
             self.offset_learner = OffsetLearner()
             await self.offset_store.async_save(self.offset_learner.dump())
@@ -162,6 +187,12 @@ class Controller:
 
     async def async_stop(self):
         self.stopping = True
+        if self.building_history_task and not self.building_history_task.done():
+            self.building_history_task.cancel()
+            try:
+                await self.building_history_task
+            except asyncio.CancelledError:
+                pass
         if self.air_history_task and not self.air_history_task.done():
             self.air_history_task.cancel()
             try:await self.air_history_task
@@ -214,6 +245,12 @@ class Controller:
         try:
             temporary_before = self.learner.temporary_heat.active
             self.learner.update(states,now,dt_util.now().hour)
+            building_revision = self.building.revision
+            saved_flow = self.offset_learner.air_limit.last_airflow
+            recent_flow = saved_flow['flow'] if saved_flow and 0 <= now - saved_flow['time'] <= 7200 else None
+            self.building.observe(building_reading(states, now, recent_flow), self.learner.temporary_heat.learning_hold)
+            if self.predictor and self.building.revision != building_revision:
+                self.predictor.last_refresh = None
             if self.predictor and temporary_before != self.learner.temporary_heat.active:
                 self.predictor.last_refresh = None
             revision=self.offset_learner.revision
@@ -221,15 +258,17 @@ class Controller:
                                        learn_emitter=not self.learner.temporary_heat.learning_hold)
             if revision!=self.offset_learner.revision:
                 await self.offset_store.async_save(self.offset_learner.dump())
-            if self.learner.revision != self.saved_learning_revision:
-                await self.learning_store.async_save(self.learner.dump())
+            if self.learner.revision != self.saved_learning_revision or self.building.revision != building_revision:
+                await self.learning_store.async_save({**self.learner.dump(), 'building': self.building.dump()})
                 self.saved_learning_revision = self.learner.revision
         except Exception:
             _LOGGER.exception('Adaptive learning update failed; retaining the last working model')
         await self._observe_morning_completion(states,now)
         if self.predictor and not hold_inline_writes:
             try:
-                self.predictor.adaptive_model = {**self.learner.parameters(),'c1_direction':self.data['c1_direction'],'c1_changed':self.data['c1_changed'],'dhw_morning_pending':self.data['dhw_morning_pending'],'dhw_morning_completed':self._morning_completed(now)}
+                learned = self.learner.parameters()
+                building = self.building.estimate(now, learned)
+                self.predictor.adaptive_model = {**learned, 'building_heat_loss': building,'c1_direction':self.data['c1_direction'],'c1_changed':self.data['c1_changed'],'dhw_morning_pending':self.data['dhw_morning_pending'],'dhw_morning_completed':self._morning_completed(now)}
                 self.predictor.learning = self.learner.diagnostics()
                 self.predictor.offset_response = self.offset_learner.parameters()
                 self.predictor.air_limit = self.offset_learner.air_limit

@@ -23,6 +23,14 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Overnight heat loss and sustained compressor output — v0.34.0
+
+Smart Control learns the building’s heat-loss coefficient from 6–12 hour overnight energy balances. It compares estimated space heat with indoor–outdoor degree-hours and the room-temperature change. Hot-water charging and defrost time stay in the balance with zero new space heat. Windows containing inline-heater use are excluded.
+
+The model estimates compressor heat from myUplink airflow, BT20, BT21, BT12 and compressor frequency. It averages output over complete defrost cycles and uses comparable airflow, supply temperature, outdoor temperature and compressor limits to estimate sustained capacity. When that capacity is needed to hold rooms near the configured minimum, the planner preserves heating demand. The locally measured BT1 temperature anchors the start of the outdoor forecast.
+
+On update, Smart Control reads available Recorder data in the background and continues learning from live observations. The overnight fit replaces the existing loss coefficient after it predicts separate cold nights with enough variation in the training data. Integration diagnostics show the sample coverage, validation status and estimated sustained output. Air-side heat is an estimate of sensible heat recovery and omits latent heat from moisture.
+
 ## Lowest-cost heating and comparable recovery — v0.33.0
 
 Smart Control chooses the lowest estimated electricity cost among evaluated plans that meet configured room and hot-water limits. If capacity prevents meeting a limit, it compares plans with similar average, worst and final shortfalls and a recovery deadline within 30 minutes of the earliest comparable trajectory. A reachable deadline carries into the next replan. The final energy cost includes an estimate of heat still needed beyond the forecast to reach the configured minimums. Temperature uncertainty breaks cost ties.
