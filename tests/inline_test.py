@@ -30,7 +30,7 @@ class WindowTests(unittest.TestCase):
         states['sensor.vp_degree_minutes_2'].state = '-1200'
         states[engine.REQUIRED].state = '44'
         states[engine.C1].state = '0'
-        model = {**MODEL, 'room_min_c': 19., 'room_max_c': 21., 'heat_loss_kw_per_k': .18,
+        model = {**MODEL, 'room_min_c': 19., 'room_max_c': 21., 'heat_loss_kw_per_k': .22,
                  'heating_lag_hours': .5, 'dhw_morning_completed': True}
         response = {'theta': [.5,.5,.2,1.]}
         commands = {'commands': [{'start': now, 'end': slots[-1]['end'], 'offset': 0, 'dhw_mode': 'Economy'}]}
@@ -104,6 +104,45 @@ class WindowTests(unittest.TestCase):
         result = inline.compare_windows(slots, base, NOW, NOW, 4., replay, work.PlanningBudget(10))
         self.assertEqual([(w['start'], w['end']) for w in result['windows']], [(NOW+1800, NOW+3660)])
         self.assertAlmostEqual(sum(w['estimated_cost'] for w in result['windows']), 4.2)
+
+    def test_optional_heat_cannot_set_its_own_earlier_recovery_deadline(self):
+        slots = timeline(NOW, count=56)
+        base = {'model': {'room_min_c': 19., 'tank_min_c': 42.}, 'morning_shortfall': 0.,
+                'constraint_violation_score': 1., 'inline_kwh': 0., 'model_cost': 78.,
+                'recovery': {'rms_deficit_c': .31, 'worst_deficit_c': .55, 'end_deficit_c': 0.,
+                             'last_deficit_hours': 13.5, 'morning_shortfall_c': 0.},
+                'steps': [{'end': NOW+900, 'room1': 18.5, 'room2': 19.1, 'water': 49}]}
+        def replay(trial, kw):
+            steps = [{**s, 'room1': 18.5, 'room2': 19.1, 'water': 49.,
+                      'inline_kw': 1. if s['inline_allowed'] else 0.} for s in trial]
+            return {**base, 'steps': steps, 'model_cost': 81., 'constraint_violation_score': .9,
+                    'inline_kwh': sum(s['inline_kw'] * s['dt'] for s in steps),
+                    'recovery': {**base['recovery'], 'rms_deficit_c': .30, 'last_deficit_hours': 12.}}
+
+        self.assertIsNone(inline.compare_windows(slots, base, NOW, NOW, 6.5, replay, work.PlanningBudget(10)))
+        offered = {'windows': [{'start': NOW+1800, 'end': NOW+2760, 'kw': 6.5}], 'horizon_end': NOW+43200}
+        self.assertIsNone(inline.compare_windows(slots, base, NOW, NOW, 6.5, replay,
+                                                work.PlanningBudget(10), preferred=offered))
+
+    def test_unmet_recovery_tests_a_late_cheap_quarter_on_its_own(self):
+        late = NOW+3*3600
+        slots = timeline(NOW, count=24, price=lambda i: 1. if i == 12 else 4.)
+        base = {'model': {'room_min_c': 19., 'tank_min_c': 42.}, 'morning_shortfall': 0.,
+                'constraint_violation_score': 1., 'inline_kwh': 0., 'model_cost': 10.,
+                'recovery': {'rms_deficit_c': .31, 'worst_deficit_c': .55, 'end_deficit_c': .29,
+                             'last_deficit_hours': 6., 'morning_shortfall_c': 0.},
+                'steps': [{'end': NOW+900, 'room1': 18.5, 'room2': 19.1, 'water': 49}]}
+        def replay(trial, kw):
+            steps = [{**s, 'room1': 18.5, 'room2': 19.1, 'water': 49.,
+                      'inline_kw': 1. if s['inline_allowed'] else 0.} for s in trial]
+            return {**base, 'steps': steps, 'constraint_violation_score': .5,
+                    'inline_kwh': sum(s['inline_kw'] * s['dt'] for s in steps),
+                    'model_cost': 10. + sum(s['inline_kw'] * s['dt'] * s['price'] for s in steps),
+                    'recovery': {**base['recovery'], 'rms_deficit_c': .20, 'end_deficit_c': 0.,
+                                 'last_deficit_hours': 5.}}
+
+        result = inline.compare_windows(slots, base, NOW, NOW, 6.5, replay, work.PlanningBudget(10))
+        self.assertEqual([(w['start'], w['end']) for w in result['windows']], [(late, late+960)])
 
 
 class DispatchTests(unittest.IsolatedAsyncioTestCase):

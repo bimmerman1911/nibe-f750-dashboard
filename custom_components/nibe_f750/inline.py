@@ -4,7 +4,7 @@ import math
 from secrets import token_hex
 
 from .dhw import next_deadline
-from .economics import plan_limits, selection_key
+from .economics import EPSILON, Recovery, plan_limits, selection_key
 from .engine import fresh, number
 
 CAP_ENTITY = 'select.vp_set_max_electrical_add'
@@ -138,9 +138,19 @@ def compare_windows(slots, baseline, now, earliest, kw, replay, budget, preferre
         return None
 
     horizon_end = min(slots[-1]['end'], now + VISIBLE_HORIZON)
+    # If the compressor already reaches the room and water targets, optional
+    # resistance heat must compete against that recovery on cost. A faster
+    # trial cannot create an earlier deadline and thereby require itself.
+    limits = None
+    if 'recovery' in baseline:
+        recovery = Recovery.from_plan(baseline)
+        if recovery.end_deficit_c <= EPSILON and recovery.morning_shortfall_c <= EPSILON:
+            planned = baseline.get('planning', {}).get('recovery_limits')
+            limits = Recovery(**planned) if planned else plan_limits((baseline,), model)
+
     def cheapest(candidates):
-        limits = plan_limits((plan for _, plan in candidates), model)
-        return min(candidates, key=lambda candidate: (selection_key(candidate[1], limits), len(candidate[0])))
+        goals = limits if limits is not None else plan_limits((plan for _, plan in candidates), model)
+        return min(candidates, key=lambda candidate: (selection_key(candidate[1], goals), len(candidate[0])))
 
     if preferred is not None:
         windows = [(w['start'], w['end']) for w in preferred['windows']
@@ -157,6 +167,7 @@ def compare_windows(slots, baseline, now, earliest, kw, replay, budget, preferre
     current = baseline
     attempted = set()
     evaluated = [((), baseline)]
+    ranked_quarters = list(candidate_windows(slots, baseline, now, earliest, horizon_end, follow_up=True))
 
     def evaluate(candidate):
         attempted.add(tuple(candidate))
@@ -179,6 +190,9 @@ def compare_windows(slots, baseline, now, earliest, kw, replay, budget, preferre
             start, end = ordered[0]
             adjacent = [(start, end + extra * PRICE_QUARTER) for extra in (1, 3)
                         if end + extra * PRICE_QUARTER <= horizon_end]
+            # Test later bargains on their own before committing to an early
+            # run. The full replay checks any room or hot-water shortfall.
+            ordered = list(dict.fromkeys([ordered[0], *ranked_quarters[:3], *ordered[1:]]))
         for candidate in dict.fromkeys([*ordered[:1], *adjacent[:2], *ordered[1:]]):
             budget.check_cancelled()
             if len(attempted) >= 18 or checks >= 6 or budget.remaining() < .35:
@@ -201,7 +215,6 @@ def compare_windows(slots, baseline, now, earliest, kw, replay, budget, preferre
     windows, current = cheapest(evaluated)
     if not windows and len(evaluated) > 1:
         windows, current = cheapest(evaluated[1:])
-    ranked_quarters = list(candidate_windows(slots, baseline, now, earliest, horizon_end, follow_up=True))
     for removed in reversed(windows):
         surviving = [w for w in windows if w != removed]
         if not surviving:
