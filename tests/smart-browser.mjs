@@ -179,6 +179,22 @@ try {
   assert.match(await card.locator('[data-inline-approval]').textContent(),/Awaiting approval.*through/);
   assert.equal((await card.locator('[data-inline-windows]').textContent()).match(/up to 6[.,]5 kW/g)?.length,2);
   assert.match(await card.locator('.prediction').textContent(),/Proposed inline heat 2[.,]2 kWh/);
+  await page.evaluate(()=>{
+    const c=document.querySelector('nibe-f750-smart-card');
+    const forecast=window.smartHass.states['sensor.nibe_heating_forecast'].attributes.forecast;
+    forecast.steps.slice(0,2).forEach((s,i)=>{
+      s.outdoor+=i;
+      s.outdoor_raw=s.outdoor+1.5;
+    });
+    c.render();c.inspectChart('weather',forecast.steps[0].start*1000);
+  });
+  assert.ok(await weatherChart.locator('[data-series="weatherRaw"]').isVisible());
+  assert.match(await weatherChart.locator('.chart-inspector').textContent(),/Local .*°C.*Source .*°C/);
+  await weatherChart.locator('summary').click();
+  await weatherChart.getByLabel('Source forecast',{exact:true}).uncheck();
+  assert.equal(await weatherChart.locator('[data-series="weatherRaw"]').isVisible(),false);
+  await weatherChart.getByLabel('Source forecast',{exact:true}).check();
+  await weatherChart.locator('summary').click();
   const basePower = await card.locator('[data-series="predicted"]').getAttribute('d');
   await page.evaluate(()=>{
     const now=Date.now()/1000;

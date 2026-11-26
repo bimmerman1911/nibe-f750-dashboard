@@ -1,15 +1,20 @@
 """Read forecasts/prices through HA integrations; no credentials or pump setters."""
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+import logging
+
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 from .engine import ROOM1, ROOM2, number, fresh, PRICE
-from .predictive import prices, timeline, DEFAULTS
+from .predictive import prices, timeline_from_points, weather_points, DEFAULTS
 from .joint import plan as joint_plan, _search as replay_plan
 from .inline import compare_windows, supports_window, CAP_ENTITY, STATUS_ENTITY
 from .dhw import next_deadline
 from .work import PlanningBudget, ReservedBudget
 from .building import BT1, capacity_at
+from .local_weather import LocalWeather
 from zoneinfo import ZoneInfo
 
+_LOGGER = logging.getLogger(__name__)
 
 class Predictor:
     def __init__(self, hass, options=None):
@@ -24,10 +29,37 @@ class Predictor:
         self.command_not_before=0.
         self.inline_offer=None
         self.inline_used_until=0.
+        self.weather_model = LocalWeather()
+        self.weather_store = Store(hass, 1, 'nibe_f750.local_weather')
+        self.weather_loaded = False
+        self.weather_saved = 0
+        self.weather_save_after = 0.
         self.result={'status':'Waiting for forecast','message':'Loading prices and hourly weather.', 'steps':[]}
 
+    async def _save_local_weather(self, now):
+        if self.weather_model.revision == self.weather_saved or now < self.weather_save_after:
+            return
+        self.weather_save_after = now + 900
+        try:
+            await self.weather_store.async_save(self.weather_model.dump())
+            self.weather_saved = self.weather_model.revision
+        except Exception:
+            _LOGGER.exception('Could not save local weather learning')
+
     async def async_update(self, states, now):
+        if not self.weather_loaded:
+            self.weather_loaded = True
+            try:
+                self.weather_model.restore(await self.weather_store.async_load(), now)
+            except Exception:
+                _LOGGER.exception('Could not restore the local weather model')
+        bt1 = states.get(BT1)
+        measured = number(bt1.state) if fresh(bt1, now) else None
+        if measured is not None and not -55 <= measured <= 50:
+            measured = None
+        self.weather_model.observe(bt1.last_reported.timestamp() if measured is not None else None, measured, now)
         if self.last_refresh is not None and now-self.last_refresh < self.retry_after:
+            await self._save_local_weather(now)
             return self.result
         self.last_refresh=now
         self.retry_after=900
@@ -47,13 +79,12 @@ class Predictor:
                 raise ValueError('Hourly weather entity unavailable')
             response=await self.hass.services.async_call('weather','get_forecasts',
                 {'entity_id':weather_id,'type':'hourly'},blocking=True,return_response=True)
-            rows=list(response[weather_id]['forecast'])
             unit=weather.attributes.get('temperature_unit')
-            if rows:
-                from .predictive import timestamp
-                if 0<timestamp(rows[0]['datetime'])-now<=5400 and number(weather.attributes.get('temperature')) is not None:
-                    rows.insert(0,{'datetime':datetime.fromtimestamp(now,timezone.utc).isoformat(),
-                                   'temperature':weather.attributes['temperature']})
+            points = weather_points(response[weather_id]['forecast'], unit)
+            self.weather_model.record(weather_id, points, now)
+            current = number(weather.attributes.get('temperature'))
+            if points and 0 < points[0][0] - now <= 5400 and current is not None:
+                points.insert(0, (now, (current - 32) * 5 / 9 if unit == '°F' else current))
             entity=states.get(PRICE)
             attrs=entity.attributes if entity else {}
             unpublished=False
@@ -83,18 +114,7 @@ class Predictor:
                 except Exception:
                     tomorrow=[];unpublished=True
                 market=prices(today+tomorrow,'SEK/MWh')
-            slots=timeline(market,rows,now,unit)
-            bt1 = states.get(BT1)
-            measured = number(bt1.state) if fresh(bt1, now) else None
-            if measured is not None and not -45 <= measured <= 40:
-                measured = None
-            if measured is not None and slots:
-                # Use the local observation at the start and blend back to
-                # SMHI over the first two hours.
-                discrepancy = measured - slots[0]['outdoor']
-                for slot in slots:
-                    midpoint = (slot['start'] + slot['end']) / 2
-                    slot['outdoor'] += discrepancy * max(0., 1. - (midpoint - now) / 7200)
+            slots=timeline_from_points(market,points,now)
             required=(ROOM1,ROOM2,'sensor.vp_hot_water_top_bt7','sensor.vp_hot_water_charging_bt6')
             if not all(fresh(states.get(e),now) and number(states[e].state) is not None for e in required):
                 raise ValueError('Fresh room and tank readings are needed for predictions')
@@ -109,6 +129,7 @@ class Predictor:
             model={**DEFAULTS, **{k:v for k,v in self.options.items() if k in DEFAULTS}, **self.adaptive_model}
             model['timezone']=getattr(getattr(self.hass,'config',None),'time_zone','Europe/Stockholm')
             local_timezone=ZoneInfo(model['timezone'])
+            local_weather = self.weather_model.adjust(slots, points, measured, now, local_timezone)
             for slot in slots:
                 slot['local_hour']=datetime.fromtimestamp(slot['start'],local_timezone).hour
                 slot['dhw_deadline']=slot['start']<next_deadline(slot['start'],model['timezone'])<=slot['end']
@@ -161,7 +182,7 @@ class Predictor:
                         # A recent near-limit reading is an upper bound based
                         # on steady heating, pending full-cycle coverage.
                         slot['sustained_heat_kw'] = building['recent_heating_kw']
-                if 'sustained_heat_kw' in slots[0]:
+                if slots and 'sustained_heat_kw' in slots[0]:
                     building['sustained_heat_kw'] = slots[0]['sustained_heat_kw']
                     building['defrost_minutes_per_hour'] = slots[0].get('defrost_minutes_per_hour')
                 model['building_heat_loss'] = building
@@ -188,7 +209,7 @@ class Predictor:
                 # The worker observes this flag at each search expansion.
                 budget.cancelled.set()
             self.retry_after=min(900,max(60,result.get('horizon_end',now+900)-now-30))
-            self.result={**result,'generated_at':now,'weather_entity':weather_id,
+            self.result={**result,'generated_at':now,'weather_entity':weather_id, 'local_weather':local_weather,
                          'tomorrow_unavailable':unpublished,'currency':'SEK',
                          'initial_room':room,'initial_water':tank,'learning':self.learning,
                          'price_basis':'Source Nord Pool prices; no extra VAT/add-ons applied.'}
@@ -196,4 +217,5 @@ class Predictor:
             self.retry_after=120
             # Clear previous recommendations on any source/model failure.
             self.result={'status':'Waiting for forecast','message':str(err),'steps':[], 'generated_at':now}
+        await self._save_local_weather(now)
         return self.result

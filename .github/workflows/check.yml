@@ -15,6 +15,7 @@ jobs:
       - run: python tests/control_test.py
       - run: python tests/integration_test.py
       - run: python tests/predictive_test.py
+      - run: python tests/local_weather_test.py
       - run: python tests/adaptive_test.py
       - run: python tests/building_test.py
       - run: python tests/accounting_test.py

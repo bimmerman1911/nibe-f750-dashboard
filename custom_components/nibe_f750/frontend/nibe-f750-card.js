@@ -662,7 +662,7 @@ if(globalThis.customElements&&!customElements.get('nibe-f750-smart-card')) {
     }
     chartShell(kind,svg,data){
       this._chartData[kind]=data;const state=this.chartState(kind);
-      const choices=kind==='price'?[['price','Price'],['predicted','Predicted kW'],['actual','Observed kW estimate'],['schedule','Schedule colours'],['inline','Inline estimate']]:kind==='indoor'?[['c1','C1 · Upstairs'],['c2','C2 · Downstairs']]:[['temperature','Temperature']];
+      const choices=kind==='price'?[['price','Price'],['predicted','Predicted kW'],['actual','Observed kW estimate'],['schedule','Schedule colours'],['inline','Inline estimate']]:kind==='indoor'?[['c1','C1 · Upstairs'],['c2','C2 · Downstairs']]:data.hasRaw?[['temperature','Local forecast'],['weatherRaw','Source forecast']]:[['temperature','Temperature']];
       return `<div class="interactive-chart" data-chart="${kind}"><div class="chart-toolbar" role="group" aria-label="${kind==='price'?'Prices':kind==='indoor'?'Indoor temperature':'Weather'} chart navigation"><button data-nav="back" aria-label="Earlier interval">‹</button><button data-nav="in" aria-label="Zoom in">＋</button><button data-nav="out" aria-label="Zoom out">−</button><button data-nav="forward" aria-label="Later interval">›</button><button data-nav="reset">Reset</button><span class="chart-span">${round((data.end-data.start)/3600000,1)} h</span></div>${svg.replace('<svg ','<svg tabindex="0" ' ).replace('</svg>',`<line data-crosshair visibility="hidden" y1="${data.top}" y2="${data.height-data.bottom}" stroke="#647b89" stroke-dasharray="3 3"/></svg>`)}<div class="chart-inspector" aria-live="polite">Tap or hover to inspect</div><details class="chart-options" ${state.options?'open':''}><summary>Data & labels</summary><div class="chart-choices">${[...choices,['labels','Point labels']].map(([key,label])=>`<label><input type="checkbox" data-option="${key}" ${key==='labels'?state.labels?'checked':'':state[key]!==false?'checked':''}>${label}</label>`).join('')}</div></details></div>`;
     }
     inspectChart(kind,time){
@@ -687,7 +687,10 @@ if(globalThis.customElements&&!customElements.get('nibe-f750-smart-card')) {
           else values.push(row.action==='off'?'Coast':row.action==='dhw'?'DHW':'Heating');
         }
       } else if(kind==='indoor'){for(const key of ['c1','c2'])if(c[key]!==false&&Number.isFinite(row[key]))values.push(`${key.toUpperCase()} ${round(row[key],2)} °C`);values.push(row.start>Date.now()?'Plan prediction':'Recorded');
-      } else if(c.temperature!==false)values.push(`${round(row.outdoor,2)} °C`);
+      } else {
+        if(c.temperature!==false)values.push(`${d.hasRaw?'Local ':''}${round(row.outdoor,2)} °C`);
+        if(d.hasRaw&&c.weatherRaw!==false&&Number.isFinite(row.outdoor_raw))values.push(`Source ${round(row.outdoor_raw,2)} °C`);
+      }
       root.querySelector('.chart-inspector').textContent=`${clock(row.start,d.tz)}–${clock(row.end,d.tz)} · ${values.join(' · ')||'No selected data available'}`;
       const line=root.querySelector('[data-crosshair]'),x=d.left+(Math.max(d.start,row.start)-d.start)/(d.end-d.start)*(d.width-d.left-d.right);
       line.setAttribute('x1',x);line.setAttribute('x2',x);line.setAttribute('visibility','visible');
@@ -726,7 +729,7 @@ if(globalThis.customElements&&!customElements.get('nibe-f750-smart-card')) {
         if(state.labels){
           const rows=d.points.filter(r=>r.start>=d.start&&r.start<d.end),step=Math.max(1,Math.ceil(rows.length/5));
           rows.filter((_,i)=>i%step===0).forEach(row=>{
-            const value=kind==='indoor'?(state.c1!==false?row.c1:state.c2!==false?row.c2:null):kind==='weather'?(state.temperature!==false?row.outdoor:null):state.price!==false?row.price:state.predicted!==false?row.predicted_kw:state.actual!==false?row.actual_kw:null;
+            const value=kind==='indoor'?(state.c1!==false?row.c1:state.c2!==false?row.c2:null):kind==='weather'?(state.temperature!==false?row.outdoor:d.hasRaw&&state.weatherRaw!==false?row.outdoor_raw:null):state.price!==false?row.price:state.predicted!==false?row.predicted_kw:state.actual!==false?row.actual_kw:null;
             if(!Number.isFinite(value))return;
             const text=document.createElementNS('http://www.w3.org/2000/svg','text');text.dataset.pointLabel='';text.setAttribute('x',d.left+(row.start-d.start)/(d.end-d.start)*(d.width-d.left-d.right));text.setAttribute('y',Math.max(d.top+10,Math.min(d.height-d.bottom-4,d.labelY(row)-6)));text.textContent=round(value,2);svg.append(text);
           });
@@ -826,10 +829,18 @@ if(globalThis.customElements&&!customElements.get('nibe-f750-smart-card')) {
       const points=rows.filter(r=>r.end>start&&r.start<end&&Number.isFinite(r.outdoor));
       if(!points.length)return '<p>No forecast data in this interval.</p>';
       const width=Math.max(320,Math.min(760,(this._width||this.clientWidth)-80)),height=180,left=38,right=12,top=24,bottom=32;
-      const lo=Math.min(...points.map(s=>s.outdoor),0),hi=Math.max(...points.map(s=>s.outdoor),lo+1);
+      const state=this.chartState('weather'),hasRaw=points.some(p=>Number.isFinite(p.outdoor_raw));
+      const values=points.flatMap(p=>[state.temperature!==false?p.outdoor:null,state.weatherRaw!==false?p.outdoor_raw:null]).filter(Number.isFinite);
+      const lo=Math.min(...values,0),hi=Math.max(...values,lo+1);
       const x=t=>left+(t-start)/(end-start)*(width-left-right),y=v=>height-bottom-(v-lo)/(hi-lo)*(height-top-bottom);
-      const path=points.map((r,i)=>`${i?'L':'M'}${x(Math.max(start,r.start))} ${y(r.outdoor)}`).join(' ');
-      return this.chartShell('weather',`<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Outdoor temperature forecast"><text x="0" y="12">°C</text><path data-series="temperature" d="${path}" fill="none" stroke="#759eba" stroke-width="2.5"/><text x="0" y="${top+8}">${round(hi,2)}</text><text x="0" y="${height-bottom}">${round(lo,2)}</text>${Array.from({length:4},(_,i)=>start+(end-start)*i/3).map((t,i)=>`<text x="${x(t)}" y="${height-5}" text-anchor="${i===3?'end':i===0?'start':'middle'}">${clock(t,tz)}</text>`).join('')}</svg>`,{points,start,end,width,left,right,top,bottom,height,tz,labelY:r=>y(r.outdoor)});
+      const path=key=>{
+        const visible=points.filter(r=>Number.isFinite(r[key]));
+        return visible.map((r,i)=>`${i?'L':'M'}${x(Math.max(start,r.start))} ${y(r[key])}`).join(' ')
+          +(visible.length===1?` H${x(Math.min(end,visible[0].end))}`:'');
+      };
+      const raw=hasRaw?`<path data-series="weatherRaw" d="${path('outdoor_raw')}" fill="none" stroke="#8a98a5" stroke-width="2" stroke-dasharray="5 4"/>`:'';
+      const chart=this.chartShell('weather',`<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Outdoor temperature forecast"><text x="0" y="12">°C</text>${raw}<path data-series="temperature" d="${path('outdoor')}" fill="none" stroke="#527eb5" stroke-width="2.5"/><text x="0" y="${top+8}">${round(hi,2)}</text><text x="0" y="${height-bottom}">${round(lo,2)}</text>${Array.from({length:4},(_,i)=>start+(end-start)*i/3).map((t,i)=>`<text x="${x(t)}" y="${height-5}" text-anchor="${i===3?'end':i===0?'start':'middle'}">${clock(t,tz)}</text>`).join('')}</svg>`,{points,start,end,width,left,right,top,bottom,height,tz,hasRaw,labelY:r=>y(state.temperature!==false?r.outdoor:r.outdoor_raw)});
+      return chart+(hasRaw?'<div class="legend"><span><i style="background:#527eb5"></i>Local forecast</span><span>Dashed: source forecast</span></div>':'');
     }
 
     render(){

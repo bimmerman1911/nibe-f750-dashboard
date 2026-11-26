@@ -23,6 +23,12 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Local outdoor forecast — v0.34.1
+
+Smart Control saves the weather forecast before each hour and compares it with the F750’s BT1 reading when that hour arrives. It checks whether the source tends to be warmer or colder at different times of day, forecast temperatures and lead times. It applies a learned correction only where it improves the forecast on separate recent days. The most recent BT1 reading still anchors the first two hours.
+
+The Outdoor forecast chart shows the local estimate used by the planner and the source forecast. Learning starts after the update and needs at least six days with enough paired readings for a given lead time. It is saved across restarts.
+
 ## Overnight heat loss and sustained compressor output — v0.34.0
 
 Smart Control learns the building’s heat-loss coefficient from 6–12 hour overnight energy balances. It compares estimated space heat with indoor–outdoor degree-hours and the room-temperature change. Hot-water charging and defrost time stay in the balance with zero new space heat. Windows containing inline-heater use are excluded.

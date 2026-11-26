@@ -41,7 +41,7 @@ def prices(rows, unit):
     return result
 
 
-def timeline(price_rows, weather, now, unit='°C'):
+def weather_points(weather, unit):
     if unit not in ('°C','°F'):
         raise ValueError('Weather temperature units are missing')
     forecast = sorted([(timestamp(w['datetime']), numeric(w['temperature'])) for w in weather])
@@ -49,6 +49,17 @@ def timeline(price_rows, weather, now, unit='°C'):
         forecast = [(t,(v-32)*5/9) for t,v in forecast]
     if any(forecast[i][0] == forecast[i-1][0] for i in range(1,len(forecast))):
         raise ValueError('Duplicate forecast timestamps')
+    return forecast
+
+
+def timeline(price_rows, weather, now, unit='°C'):
+    forecast = weather_points(weather, unit)
+    return timeline_from_points(price_rows, forecast, now)
+
+
+def timeline_from_points(price_rows, forecast, now):
+    if not forecast:
+        return []
     slots=[]
     cursor=now
     limit=min(now+86400, price_rows[-1]['end'] if price_rows else now, forecast[-1][0] if forecast else now)
