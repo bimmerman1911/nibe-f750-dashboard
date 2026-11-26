@@ -3,7 +3,7 @@
 All heat/power remain model estimates. Native firmware owns the actuators.
 Commands respect write timing; price/weather intervals remain quarter-hourly.
 """
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import math
@@ -19,11 +19,9 @@ from .timing import improve as improve_timing
 from .work import ReservedBudget
 from .coordination import committed_offset, differential_rate
 from .temporary_heat import EVENT_SECONDS, NO_HEAT, cooler_room_needs_heat, forecast_warmth, limit_offset_drop
+from .economics import Recovery, plan_limits, recovery_limits, selection_key
 
 COMMAND_SECONDS=960.
-# SEK per squared degree-hour inside the uncertainty buffer. Actual configured
-# limits remain lexicographic constraints; marginal buffer risk has finite cost.
-COMFORT_RISK_PRICE=100.
 
 @dataclass(frozen=True, slots=True)
 class DeferHeat:
@@ -85,18 +83,9 @@ class State:
     offset_direction: float=0.
     offset_changed: float=0.
     temporary_warmth: tuple=(0., 0.)
-
-
-def selection_key(result):
-    """Price optimisation within configured comfort and morning reserves.
-
-    In-band temperature preferences cannot buy extra expensive heat. Only
-    necessary endpoint reserves carry value into the next horizon. Uncertainty
-    buffer exposure has finite cost, so tiny differences cannot override price.
-    """
-    return (result['constraint_violation_score'],result['morning_shortfall'],
-            result['selection_score'][1]+COMFORT_RISK_PRICE*result.get('comfort_risk',0.),result['inline_kwh'],
-            result['objective_components']['control_penalties'])
+    worst_deficit: float=0.
+    end_deficit: float=0.
+    last_deficit_hours: float=0.
 
 
 def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
@@ -122,7 +111,8 @@ def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
     base_search_complete=len(results)==len(strategies)
     # Try removing near-term heating while retaining the entire later plan.
     # Unlike an all-day defer template, this tests a local timing correction.
-    seed=min(results,key=selection_key)
+    initial_limits = plan_limits(results, results[0]['model'])
+    seed=min(results,key=lambda r: selection_key(r, initial_limits))
     lower=offset_levels(states[C1])[0]
     deadlines=sorted(set([now+1800,now+3600,now+7200]+windows[:1]))
     for until in deadlines:
@@ -141,14 +131,24 @@ def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
         results.append(_search(slots,states,now,model,response,min_hz,max_hz,
             command_not_before,ReservedBudget(budget,3.) if budget else None,emitter,width=width))
     base_search_complete=base_search_complete and (budget is None or any(r['planning']['strategy']=='beam' for r in results))
-    best=min(results,key=selection_key)
+    limits = plan_limits(results, results[0]['model'])
+    # Carry a reachable deadline into the next replan so a cheap delay cannot
+    # keep moving an otherwise achievable recovery further into the future.
+    previous_deadline = incumbent.get('planning', {}).get('recovery_deadline') if keep else None
+    if previous_deadline is not None and now < previous_deadline < now + limits.last_deficit_hours * 3600:
+        carried = replace(limits, last_deficit_hours=(previous_deadline-now)/3600)
+        if any(Recovery.from_plan(r).misses(carried) == ((0., 0.), 0.) for r in results):
+            limits = carried
+    def rank(result):
+        return selection_key(result, limits)
+    best=min(results,key=rank)
     seed=best
     expanded=sum(r['planning']['expanded'] for r in results)
     def replay(commands):
         return _search(slots,states,now,model,response,min_hz,max_hz,
             command_not_before,budget,emitter,width=1,strategy='previous',incumbent={'commands':commands})
     alternatives=[r for r in results if r['planning']['strategy'] in ('price-aware previous','price-aware flex')]
-    best=improve_timing(seed,slots,offset_levels(states[C1]),replay,selection_key,budget,alternatives=alternatives)
+    best=improve_timing(seed,slots,offset_levels(states[C1]),replay,rank,budget,alternatives=alternatives)
     if best is not seed:results.append(best)
     best['planning']['search_seconds']=round(monotonic()-started,3)
     best['planning']['total_expanded']=expanded+best['planning']['timing_comparison']['expanded']
@@ -156,9 +156,12 @@ def plan(slots, states, now, model=None, response=None, min_hz=20., max_hz=84.,
     best['planning']['defer_until_candidates']=windows
     best['planning']['candidate_schedules']=len(results)
     best['planning']['selected_strategy']=best['planning']['strategy']
+    best['planning']['recovery_limits'] = asdict(limits)
+    deadline = now + limits.last_deficit_hours * 3600
+    best['planning']['recovery_deadline'] = deadline if now < deadline <= slots[-1]['end'] else None
     best['planning']['candidate_costs']=[{'strategy':r['planning']['strategy'],
-        'cost':r['model_cost'],'violation':r['constraint_violation_score'],
-        'objective':r['selection_score'][1],'ranked_objective':selection_key(r)[2],'morning_shortfall':r['morning_shortfall'],'comfort_risk':r['comfort_risk'],**r['objective_components'],'defer_until':r['planning'].get('defer_until')} for r in results]
+        'cost':r['model_cost'],'violation':r['constraint_violation_score'],'recovery':r['recovery'],
+        'objective':r['selection_score'][1],'ranked_objective':rank(r)[2],'morning_shortfall':r['morning_shortfall'],'comfort_risk':r['comfort_risk'],**r['objective_components'],'defer_until':r['planning'].get('defer_until')} for r in results]
     best['planning']['search_limited']=any(r['planning']['search_limited'] for r in results) or not base_search_complete or best['planning']['timing_comparison']['budget_limited']
     return best
 
@@ -264,9 +267,13 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
     def terminal(n):
         load=max(0,m['heat_loss_kw_per_k']*(n.room-slots[-1]['outdoor'])-m.get('internal_gain_kw',0.))
         in_transit=max(0,n.stored-load)*m.get('heating_lag_hours',0.)
-        deficit=max(0,(m['room_min_c']+uncertainty-cold_room(n))*m['thermal_capacity_kwh_per_k']-in_transit)
-        water_deficit=max(0,m['tank_min_c']+2-n.water)*m['tank_capacity_kwh_per_k']
+        deficit=max(0,(m['room_min_c']-cold_room(n))*m['thermal_capacity_kwh_per_k']-in_transit)
+        water_deficit=max(0,m['tank_min_c']-n.water)*m['tank_capacity_kwh_per_k']
         return heat_price*(deficit+water_deficit)
+    def metrics(n, hours, morning):
+        return Recovery.measured(n.violation, hours, n.worst_deficit, n.end_deficit, n.last_deficit_hours, morning)
+    def state_rank(n, recovery, limits):
+        return (*recovery.misses(limits), n.cost+terminal(n), n.comfort_risk, n.aux, n.penalty)
     while cursor<end-1e-6:
         if budget:
             if hasattr(budget,'remaining') and budget.remaining()<3.:limited=True
@@ -384,6 +391,8 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                     pending=reserve['dhw_morning_override'] if not holding else previous.pending
                     cost=previous.cost;penalty=previous.penalty;auxiliary_energy=previous.aux
                     miss=previous.shortfall;pieces=[];violation=previous.violation
+                    worst = previous.worst_deficit
+                    last_deficit = previous.last_deficit_hours
                     for chunk, dt, h, warmth in simulated_chunks:
                         energy=extra_energy=0.;water_minutes=0.;min_room=r;activity=[]
                         allowed_aux = aux_limit if chunk.get('inline_allowed', True) else 0.
@@ -431,10 +440,15 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                             below=max(0,m['room_min_c']+uncertainty-cold)
                             above=max(0,warm-m['room_max_c']+uncertainty)
                             tank_below=max(0,m['tank_min_c']+1-w)
-                            # Soft uncertainty buffer; actual configured bounds are
-                            # protected separately by the violation objective.
+                            # The uncertainty buffer breaks ties between equal-cost plans.
                             comfort_risk+=h*(max(0,below-.02)**2+max(0,above-.02)**2)
-                            violation+=h*(max(0,m['room_min_c']-cold)**2+max(0,warm-m['room_max_c'])**2+.1*max(0,m['tank_min_c']-w)**2)
+                            deficits = (max(0., m['room_min_c']-cold), max(0., warm-m['room_max_c']),
+                                        math.sqrt(.1)*max(0., m['tank_min_c']-w))
+                            violation += h * sum(d*d for d in deficits)
+                            end_deficit = max(deficits)
+                            if end_deficit > 1e-6:
+                                worst = max(worst, end_deficit)
+                                last_deficit = (activity_end - now) / 3600
                             penalty+=h*(1200*(below*below+above*above)+150*tank_below*tank_below
                                         +.05*(r-m['room_target_c'])**2+40*(extra+water_aux))
                             # At saturation, do not reward requesting temperatures
@@ -469,8 +483,13 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                         command['capacity_balance'] = True
                     candidates.append(State(r,w,supply,heat,stored,dm,running,charging,pending,offset,mode,
                         cost,penalty,auxiliary_energy,miss,previous,command,pieces,completed_day=completed_day,violation=violation,room_delta=room_delta,comfort_risk=comfort_risk,offset_direction=(1. if offset>previous.offset else -1.) if offset!=previous.offset else previous.offset_direction,offset_changed=cursor if offset!=previous.offset else previous.offset_changed,
-                        temporary_warmth=extra_warmth))
-        rank=lambda n:(n.violation,n.shortfall+deadline_risk(n),n.cost+terminal(n)+COMFORT_RISK_PRICE*n.comfort_risk,n.aux,n.penalty)
+                        temporary_warmth=extra_warmth, worst_deficit=worst, end_deficit=end_deficit,
+                        last_deficit_hours=last_deficit))
+        if not candidates:
+            raise ValueError('No bounded joint plan found')
+        progress = {id(n): metrics(n, (stop-now)/3600, n.shortfall+deadline_risk(n)) for n in candidates}
+        limits = recovery_limits(progress.values(), m['response_uncertainty_c'])
+        rank=lambda n: state_rank(n, progress[id(n)], limits)
         candidates.sort(key=rank)
         diverse={}
         for n in candidates:
@@ -490,9 +509,10 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
             if len(selected)>=width:break
             if all(n is not q for q in selected):selected.append(n)
         beam=sorted(selected,key=rank)
-        if not beam:raise ValueError('No bounded joint plan found')
         cursor=stop
-    best=min(beam,key=lambda n:(n.violation,n.shortfall,n.cost+terminal(n)+COMFORT_RISK_PRICE*n.comfort_risk,n.aux,n.penalty))
+    completed = {id(n): metrics(n, (end-now)/3600, n.shortfall) for n in beam}
+    limits = recovery_limits(completed.values(), m['response_uncertainty_c'])
+    best=min(beam,key=lambda n: state_rank(n, completed[id(n)], limits))
     commands=[];pieces=[];node=best
     while node.parent is not None:
         commands.append(node.command);pieces.extend(reversed(node.pieces));node=node.parent
@@ -525,6 +545,6 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
             'search_limited':limited,'comfort_margin_c':uncertainty,'known_hours':(end-now)/3600,'frequency_limit':m.get('air_limit'),'available_compressor_heat_kw':cap,'frequency_reference_hz':reference_hz,'short_horizon':end-now<21600,
             'native_tank_goal_limited':native_goal_limited,'requested_tank_target_c':requested_tank_target,'terminal_heat_value_sek_per_kwh':heat_price,'heat_basis':'Frequency-based nominal heat; not metered'},
         'selection_score':[best.violation,best.cost+terminal(best)],
-        'morning_shortfall':best.shortfall,'comfort_risk':best.comfort_risk,
-        'objective_components':{'electricity':best.cost,'control_penalties':best.penalty,'terminal_reserve':terminal(best),'uncertainty_cost':COMFORT_RISK_PRICE*best.comfort_risk},
+        'morning_shortfall':best.shortfall,'comfort_risk':best.comfort_risk,'recovery':asdict(completed[id(best)]),
+        'objective_components':{'electricity':best.cost,'control_penalties':best.penalty,'terminal_reserve':terminal(best)},
         'offset_response':response}

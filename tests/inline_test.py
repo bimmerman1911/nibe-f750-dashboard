@@ -63,7 +63,7 @@ class WindowTests(unittest.TestCase):
         cheap = (2, 3, 28, 50)
         slots = timeline(NOW, count=60, price=lambda i: .1 if i in cheap else 10.)
         base = {'model': {'room_min_c': 19., 'tank_min_c': 42.}, 'morning_shortfall': 0.,
-                'constraint_violation_score': 3., 'inline_kwh': 0.,
+                'constraint_violation_score': 3., 'inline_kwh': 0., 'model_cost': 0.,
                 'steps': [{'end': NOW + 900, 'room1': 18.5, 'room2': 19.1, 'water': 45}]}
         def replay(trial, kw):
             steps = [{**s, 'inline_kw': kw if s['inline_allowed'] and s['price'] == .1 else 0.}
@@ -81,6 +81,29 @@ class WindowTests(unittest.TestCase):
         preferred = inline.compare_windows(slots, base, NOW+4000, NOW+4000, 6.5, replay,
                                            work.PlanningBudget(10), preferred=result)
         self.assertEqual(preferred['windows'], result['windows'][1:])
+
+    def test_adjacent_cheap_quarters_beat_a_pricier_spaced_run(self):
+        prices = {2: 2., 3: 2.2, 7: 3.}
+        slots = timeline(NOW, count=16, price=lambda i: prices.get(i, 10.))
+        base = {'model': {'room_min_c': 19., 'tank_min_c': 42., 'response_uncertainty_c': .10},
+                'morning_shortfall': 0., 'constraint_violation_score': 1., 'inline_kwh': 0., 'model_cost': 5.,
+                'steps': [{'end': NOW+900, 'room1': 18.5, 'room2': 19.1, 'water': 45}]}
+
+        def replay(trial, kw):
+            steps = [{**s, 'inline_kw': kw if s['inline_allowed'] and s['price'] < 10. else 0.}
+                     for s in trial]
+            energy = sum(s['inline_kw'] * s['dt'] for s in steps)
+            cost = sum(s['inline_kw'] * s['dt'] * s['price'] for s in steps)
+            rms = .25 - min(2., energy) * .09
+            return {**base, 'steps': [{**s, 'room1': 18.5, 'room2': 19.1, 'water': 45.} for s in steps],
+                    'inline_kwh': energy, 'model_cost': 5. + cost,
+                    'constraint_violation_score': rms*rms*4,
+                    'recovery': {'rms_deficit_c': rms, 'worst_deficit_c': .5, 'end_deficit_c': rms,
+                                 'last_deficit_hours': 4., 'morning_shortfall_c': 0.}}
+
+        result = inline.compare_windows(slots, base, NOW, NOW, 4., replay, work.PlanningBudget(10))
+        self.assertEqual([(w['start'], w['end']) for w in result['windows']], [(NOW+1800, NOW+3660)])
+        self.assertAlmostEqual(sum(w['estimated_cost'] for w in result['windows']), 4.2)
 
 
 class DispatchTests(unittest.IsolatedAsyncioTestCase):

@@ -4,6 +4,7 @@ import math
 from secrets import token_hex
 
 from .dhw import next_deadline
+from .economics import plan_limits, selection_key
 from .engine import fresh, number
 
 CAP_ENTITY = 'select.vp_set_max_electrical_add'
@@ -137,6 +138,10 @@ def compare_windows(slots, baseline, now, earliest, kw, replay, budget, preferre
         return None
 
     horizon_end = min(slots[-1]['end'], now + VISIBLE_HORIZON)
+    def cheapest(candidates):
+        limits = plan_limits((plan for _, plan in candidates), model)
+        return min(candidates, key=lambda candidate: (selection_key(candidate[1], limits), len(candidate[0])))
+
     if preferred is not None:
         windows = [(w['start'], w['end']) for w in preferred['windows']
                    if w['kw'] == kw and max(now, earliest) < w['start'] + START_GRACE
@@ -144,41 +149,79 @@ def compare_windows(slots, baseline, now, earliest, kw, replay, budget, preferre
         if not windows or budget.remaining() < .35:
             return None
         trial = replay(list(trial_slots(slots, windows)), kw)
-        if improves(baseline, trial):
+        if improves(baseline, trial) and cheapest([((), baseline), (windows, trial)])[0]:
             return describe_plan(windows, trial, kw, preferred['horizon_end'])
         return None
 
     windows = []
     current = baseline
     attempted = set()
+    evaluated = [((), baseline)]
+
+    def evaluate(candidate):
+        attempted.add(tuple(candidate))
+        trial = replay(list(trial_slots(slots, candidate)), kw)
+        if trial['inline_kwh'] >= .02 and improves(baseline, trial):
+            item = (candidate, trial)
+            evaluated.append(item)
+            return item
+        return None
+
     # Bound the RPi work. Each addition is evaluated with all earlier choices
-    # so successive windows cover the remaining shortfall.
-    while len(attempted) < 24 and budget.remaining() >= .35:
-        best = None
+    # so successive quarters cover the remaining shortfall. Save time for
+    # replacing a separated run with an adjacent cheaper quarter.
+    while len(attempted) < 18 and budget.remaining() >= .35:
+        children = []
         checks = 0
-        for candidate in candidate_windows(slots, current, now, earliest, horizon_end, follow_up=bool(windows)):
+        ordered = list(candidate_windows(slots, current, now, earliest, horizon_end, follow_up=bool(windows)))
+        adjacent = [w for w in ordered if any(w[0] < e and w[1] > s for s, e in windows)]
+        if not windows and ordered:
+            start, end = ordered[0]
+            adjacent = [(start, end + extra * PRICE_QUARTER) for extra in (1, 3)
+                        if end + extra * PRICE_QUARTER <= horizon_end]
+        for candidate in dict.fromkeys([*ordered[:1], *adjacent[:2], *ordered[1:]]):
             budget.check_cancelled()
-            if len(attempted) >= 24 or checks >= 8 or budget.remaining() < .35:
+            if len(attempted) >= 18 or checks >= 6 or budget.remaining() < .35:
                 break
             combined = add_window(windows, candidate)
             if combined is None or tuple(combined) in attempted:
                 continue
-            attempted.add(tuple(combined))
             checks += 1
-            trial = replay(list(trial_slots(slots, combined)), kw)
-            if trial['inline_kwh'] - current['inline_kwh'] < .02 or not improves(current, trial):
-                continue
-            score = (trial['constraint_violation_score'], trial['morning_shortfall'], trial['model_cost'])
-            if best is None or score < best[0]:
-                best = score, combined, trial
-            if score[0] <= 1e-5 and score[1] <= .05:
+            result = evaluate(combined)
+            if result and improves(current, result[1]):
+                children.append(result)
+        if not children:
+            break
+        windows, current = cheapest(children)
+        if current['constraint_violation_score'] <= 1e-8 and current['morning_shortfall'] <= 1e-8:
+            break
+
+    # Greedy additions can strand a pricier separate run. Compare removing
+    # each run and spending its time next to one of the remaining runs.
+    windows, current = cheapest(evaluated)
+    if not windows and len(evaluated) > 1:
+        windows, current = cheapest(evaluated[1:])
+    ranked_quarters = list(candidate_windows(slots, baseline, now, earliest, horizon_end, follow_up=True))
+    for removed in reversed(windows):
+        surviving = [w for w in windows if w != removed]
+        if not surviving:
+            break
+        options = [surviving]
+        adjacent = [w for w in ranked_quarters if any(w[0] < e and w[1] > s for s, e in surviving)]
+        for quarter in adjacent:
+            grown = add_window(surviving, quarter)
+            if grown:
+                options.append(grown)
+        for candidate in options:
+            budget.check_cancelled()
+            if len(attempted) >= 24 or budget.remaining() < .35:
                 break
-        if best is None:
+            if tuple(candidate) not in attempted:
+                evaluate(candidate)
+        if len(attempted) >= 24 or budget.remaining() < .35:
             break
-        score, windows, current = best
-        if score[0] <= 1e-5 and score[1] <= .05:
-            break
-    return describe_plan(windows, current, kw, horizon_end)
+    windows, current = cheapest(evaluated)
+    return describe_plan(windows, current, kw, horizon_end) if windows else None
 
 
 class Approval:

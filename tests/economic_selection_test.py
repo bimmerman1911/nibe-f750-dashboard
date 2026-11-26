@@ -6,6 +6,8 @@ from offset_test import states as native_states
 from integration_test import load,engine
 from adaptive_test import BASE
 
+economics=load('economics')
+
 class EconomicTests(unittest.TestCase):
     def test_feasible_cheaper_plan_wins_despite_large_preference_penalty(self):
         def result(cost,penalty,violation=0,morning=0):
@@ -26,8 +28,24 @@ class EconomicTests(unittest.TestCase):
         cheap=result(21.9404,.00117743)
         self.assertIs(min([expensive,cheap],key=joint.selection_key),cheap)
         self.assertIs(min([cheap,result(1,0,.001)],key=joint.selection_key),cheap)
-        # A substantial uncertainty exposure still has an economic consequence.
-        self.assertIs(min([expensive,result(21.94,.2)],key=joint.selection_key),expensive)
+        self.assertEqual(min([result(21.94,.2),expensive],key=joint.selection_key)['selection_score'][1],21.94)
+        self.assertEqual(min([result(21.94,.2),result(21.94,.1)],key=joint.selection_key)['comfort_risk'],.1)
+
+    def test_cheapest_comparable_recovery_wins_with_a_meaningful_deadline(self):
+        def result(cost, rms, worst, time, water=0., end=0.):
+            recovery = {'rms_deficit_c': rms, 'worst_deficit_c': worst,
+                        'end_deficit_c': end, 'last_deficit_hours': time, 'morning_shortfall_c': water}
+            return {'recovery': recovery, 'model_cost': cost, 'inline_kwh': 0.}
+        best_heat = result(100., .42, .80, 4.)
+        cheap = result(85., .44, .83, 4.4)
+        late = result(70., .44, .83, 5.)
+        deeper = result(65., .44, 1.1, 4.1)
+        missed_water = result(60., .44, .83, 4.2, .5)
+        unfinished = result(55., .44, .83, 4.2, end=.23)
+        candidates = [best_heat, late, deeper, missed_water, unfinished, cheap]
+        limits = economics.plan_limits(candidates, {'response_uncertainty_c': .12})
+        self.assertEqual(limits.last_deficit_hours, 4.5)
+        self.assertIs(min(candidates, key=lambda plan: economics.selection_key(plan, limits)), cheap)
 
     def test_actual_delayed_response_case_selects_least_economic_score_when_feasible(self):
         slots,states,model,response,emitter=scenario()
@@ -37,6 +55,19 @@ class EconomicTests(unittest.TestCase):
         self.assertTrue(any(c['strategy'].startswith('coast-patch') for c in result['planning']['candidate_costs']))
         self.assertAlmostEqual(result['selection_score'][1],result['model_cost']+result['objective_components']['terminal_reserve'])
         self.assertGreaterEqual(min(s['room1'] for s in result['steps']),model['room_min_c'])
+
+    def test_live_recovery_uses_the_plan_until_a_room_falls_behind(self):
+        states = readings(room=18.8)
+        states[engine.C1].state = '2'
+        supervisor = load('supervisor')
+        command = {'start': NOW, 'end': NOW+900, 'action': 'heat', 'offset': 0., 'dhw_mode': 'Economy'}
+        model = {**joint.DEFAULTS, 'room_min_c': 19.}
+        forecast = {'generated_at': NOW, 'recovery_plan': True,
+                    'planning': {'initial_state': {'rooms': [18.8, 18.8]}, 'recovery_limits': {'last_deficit_hours': 2}},
+                    'steps': [{**command, 'room1': 18.8, 'room2': 18.8}]}
+        self.assertEqual(supervisor.request(forecast, states, NOW, model)['offset_c1'], 0.)
+        states[engine.ROOM2].state = '18.6'
+        self.assertEqual(supervisor.request(forecast, states, NOW, model)['offset_c1'], 3.)
 
     def test_part_load_calibration_requires_continuous_stable_space_heating(self):
         offset=load('offset');learner=offset.OffsetLearner()

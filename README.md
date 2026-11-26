@@ -23,6 +23,12 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Lowest-cost heating and comparable recovery — v0.33.0
+
+Smart Control chooses the lowest estimated electricity cost among evaluated plans that meet configured room and hot-water limits. If capacity prevents meeting a limit, it compares plans with similar average, worst and final shortfalls and a recovery deadline within 30 minutes of the earliest comparable trajectory. A reachable deadline carries into the next replan. The final energy cost includes an estimate of heat still needed beyond the forecast to reach the configured minimums. Temperature uncertainty breaks cost ties.
+
+Inline-heater proposals compare compressor and inline electricity together against a compressor-only run. The search tests adjacent cheap quarters as one continuous permission window and can replace a separated expensive run. A proposed run must justify its cost through the same recovery requirements. The F750 determines how much power it draws up to the approved cap.
+
 ## Temporary heat from a fireplace or sunlight — v0.32.0
 
 Smart Control checks each room for two successive rises beyond what its model expects from outdoor temperature and the heat pump. It sets aside affected observations for room and emitter learning while continuing the hot-water and native compressor learning. The forecast includes the extra heat in the affected room and lets it fade. If the other room is still near its minimum, Smart Control trims the C1 offset without a large drop that could reset degree minutes and cut shared heating.

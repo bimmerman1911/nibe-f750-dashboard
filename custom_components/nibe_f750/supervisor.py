@@ -3,6 +3,26 @@ from .engine import C1, ROOM1, ROOM2, fresh, number, offset_levels
 from .dhw import policy
 
 
+def recovery_on_track(forecast, rooms, now, minimum):
+    """Use the costed recovery unless the live rooms fall behind its trajectory."""
+    planning = forecast.get('planning', {})
+    initial = planning.get('initial_state', {}).get('rooms')
+    if not forecast.get('recovery_plan') or not planning.get('recovery_limits') or not initial:
+        return False
+    before = initial
+    previous_time = forecast['generated_at']
+    for step in forecast['steps']:
+        after = (step.get('room1'), step.get('room2'))
+        if None in after or step['end'] <= previous_time:
+            return False
+        if now < step['end']:
+            fraction = max(0., (now - previous_time) / (step['end'] - previous_time))
+            return all(actual >= minimum or (start < minimum and actual >= a + fraction * (b-a) - .10)
+                       for actual, start, a, b in zip(rooms, initial, before, after))
+        before, previous_time = after, step['end']
+    return False
+
+
 def request(forecast, states, now, model):
     generated = forecast.get('generated_at') if forecast else None
     if generated is None or not 0 <= now-generated <= 1200:
@@ -36,7 +56,7 @@ def request(forecast, states, now, model):
                 'mode':'Adaptive','generated_at':now,'locked':True,'hold_until':current['end']}
     # Reconcile a cached plan with actual settings and current room comfort.
     increment=number(states[C1].attributes.get('step')) or 1.
-    if min(rooms)<lo and max(rooms)<=hi:
+    if min(rooms)<lo and max(rooms)<=hi and not recovery_on_track(forecast, rooms, now, lo):
         offset=max(offset,current_offset+increment)
     elif max(rooms)>hi:
         offset=min(offset,current_offset-increment)

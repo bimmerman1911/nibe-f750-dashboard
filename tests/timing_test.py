@@ -69,6 +69,9 @@ class TimingTests(unittest.TestCase):
             candidate=copy.deepcopy(seed);candidate['commands']=commands
             candidate['model_cost']=0.;candidate['selection_score'][1]=0.
             candidate['constraint_violation_score']=.01
+            candidate['recovery']['rms_deficit_c'] = .03
+            candidate['recovery']['worst_deficit_c'] = .1
+            candidate['recovery']['last_deficit_hours'] = 2.
             return candidate
         result=timing.improve(seed,slots,list(range(-10,11)),unsafe,joint.selection_key,max_evaluations=8)
         self.assertIs(result,seed)
