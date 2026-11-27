@@ -273,7 +273,7 @@ class Approval:
                      if self.used_until <= w['start'] and now < w['start'] + START_GRACE
                      and (w['start'], w['end'], w['kw']) in planned), None)
 
-    def notification(self, plan, zone):
+    def notification(self, plan, zone, approval_entity=None):
         self.offer = plan
         self.token = token_hex(16)
         windows = plan['windows']
@@ -281,15 +281,24 @@ class Approval:
             return datetime.fromtimestamp(timestamp, zone).strftime('%a %H:%M')
         times = ', '.join(f"{when(w['start'])}–{when(w['end'])}" for w in windows)
         total = sum(w['estimated_cost'] for w in windows)
+        instructions = 'Press and hold for actions'
+        destinations = {}
+        if approval_entity:
+            destination = f'/?more-info-entity-id={approval_entity}'
+            destinations = {'url': destination, 'clickAction': destination}
+            instructions = 'Press and hold for actions or tap to review'
         return {
             'title': 'Approve inline heating plan?',
             'message': (f"{times}. Up to {windows[0]['kw']:g} kW, estimated {total:.2f} SEK total. "
-                        f"Reply before {when(windows[0]['start'])}. Plan through {when(plan['horizon_end'])}."),
-            'data': {'tag': 'nibe-inline-approval', 'actions': [
-                {'action': f'NIBE_INLINE_APPROVE_{self.token}', 'title': 'Approve plan'},
+                        f"Reply before {when(windows[0]['start'])}. Plan through {when(plan['horizon_end'])}. {instructions}."),
+            'data': {'tag': 'nibe-inline-approval', **destinations, 'actions': [
+                {'action': f'NIBE_INLINE_APPROVE_{self.token}', 'title': 'Approve plan', 'authenticationRequired': True},
                 {'action': f'NIBE_INLINE_DECLINE_{self.token}', 'title': 'Decline'},
             ]},
         }
+
+    def approve(self, now):
+        return self.respond(f'NIBE_INLINE_APPROVE_{self.token}', now)
 
     def respond(self, action, now):
         if not self.token or now >= self.offer['windows'][0]['start']:

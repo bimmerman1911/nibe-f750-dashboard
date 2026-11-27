@@ -134,12 +134,21 @@ try {
   await card.getByRole('button',{name:'Pause control'}).click();
   assert.equal(await page.evaluate(()=>window.controlCalls[1][1]),'turn_off');
   await page.evaluate(()=>{
+    window.smartHass.states['switch.renamed_nibe_inline_requests']={state:'on',attributes:{nibe_inline_requests:true}};
     window.smartHass.states['switch.nibe_smart_control']={entity_id:'switch.nibe_smart_control',state:'on',attributes:{controller_domain:'nibe_f750',status:'Running'}};
     document.querySelector('nibe-f750-smart-card').hass=window.smartHass;
   });
   assert.equal(await card.locator('.badge').textContent(),'Running');
   await card.getByRole('button',{name:'Pause control'}).click();
   assert.deepEqual(await page.evaluate(()=>window.controlCalls.at(-1)),['switch','turn_off',{entity_id:'switch.nibe_smart_control'}]);
+  await card.getByRole('button',{name:'Block inline requests'}).click();
+  assert.deepEqual(await page.evaluate(()=>window.controlCalls.at(-1)),['switch','turn_off',{entity_id:'switch.renamed_nibe_inline_requests'}]);
+  await page.evaluate(()=>{
+    window.smartHass.states['switch.renamed_nibe_inline_requests'].state='off';
+    document.querySelector('nibe-f750-smart-card').hass=window.smartHass;
+  });
+  await card.getByRole('button',{name:'Allow inline requests'}).click();
+  assert.deepEqual(await page.evaluate(()=>window.controlCalls.at(-1)),['switch','turn_on',{entity_id:'switch.renamed_nibe_inline_requests'}]);
   await page.evaluate(()=>{window.smartHass.states['switch.nibe_smart_control'].attributes.status='Legacy backend detected';document.querySelector('nibe-f750-smart-card').hass=window.smartHass;});
   assert.equal(await card.locator('.badge').textContent(),'Legacy backend detected');
   await page.evaluate(()=>{

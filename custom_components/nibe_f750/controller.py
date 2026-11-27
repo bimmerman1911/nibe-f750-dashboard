@@ -60,11 +60,13 @@ class Controller:
         self.control = {'mode':'Thermostat fallback','reason':'Waiting for prices and weather.'}
         self.inline = Approval()
         self.inline_service = getattr(predictor, 'options', {}).get('inline_notify_service', '')
+        self.inline_approval_entity = None
         self.inline_active_until = None
         self.unsubscribe_inline = None
         self.data['inline_restore'] = False
         self.data['inline_zero_requested'] = None
         self.data['inline_request'] = None
+        self.data['inline_requests_enabled'] = True
         self.degree_recovery = DegreeMinuteRecovery()
         self.data['degree_minute_recovery'] = None
 
@@ -87,9 +89,10 @@ class Controller:
         # Reject corrupt persistent gates rather than silently resetting a budget.
         if type(self.data['enabled']) is not bool or type(self.data['release_dhw']) is not bool or any(number(self.data[k]) is None for k in ('last_cycle', 'last_attempt','c1_direction','c1_changed')) or self.data['c1_direction'] not in (-1.,0.,1.) or self.data['c1_changed']<0:
             raise ValueError('Invalid persisted controller state')
+        self.data['inline_requests_enabled'] = self.data['inline_requests_enabled'] is True
         self.degree_recovery.restore(self.data['degree_minute_recovery'])
         if self.inline_service:
-            if self.data['enabled']:
+            if self.inline_requests_allowed:
                 self.inline.restore(self.data['inline_request'], self.inline_service, self.clock())
             self.unsubscribe_inline = self.hass.bus.async_listen(EVENT, self._inline_response)
         self.unsubscribe = async_track_time_interval(self.hass, self.async_tick, timedelta(minutes=1))
@@ -170,6 +173,29 @@ class Controller:
                 if self.degree_recovery.finish('Paused', self.clock()):
                     self.data['degree_minute_recovery'] = self.degree_recovery.event
             await self.store.async_save(dict(self.data))
+        await self.async_tick()
+
+    @property
+    def inline_requests_allowed(self):
+        return self.data['enabled'] and self.data['inline_requests_enabled'] and not self.stopping
+
+    @property
+    def inline_approval_pending(self):
+        return bool(self.inline_service and self.inline_requests_allowed and self.inline.token
+                    and self.inline.offer and self.clock() < self.inline.offer['windows'][0]['start'])
+
+    async def async_enable_inline_requests(self, enabled):
+        # Stop new grants while an existing controller cycle yields.
+        if not enabled:
+            self.data['inline_requests_enabled'] = False
+        async with self.lock:
+            self.data['inline_requests_enabled'] = enabled
+            if not enabled:
+                self.inline.clear()
+                self.inline_active_until = None
+            await self._save_inline_request()
+            self.control['inline_approval'] = self._inline_status()
+            self.notify()
         await self.async_tick()
 
     async def async_reset_learning(self):
@@ -454,12 +480,19 @@ class Controller:
         return now >= max(float(self.data['last_cycle']), float(self.data['last_attempt'])) + WRITE_INTERVAL
 
     async def _inline_response(self, event):
+        await self.async_respond_inline(action=event.data.get('action'))
+
+    async def async_respond_inline(self, *, action=None, approve_current=False):
         async with self.lock:
-            if self.data['enabled'] and not self.stopping:
-                if self.inline.respond(event.data.get('action'), self.clock()):
+            if self.inline_approval_pending:
+                now = self.clock()
+                responded = self.inline.approve(now) if approve_current else self.inline.respond(action, now)
+                if responded:
                     await self._save_inline_request()
                     self.control['inline_approval'] = self._inline_status()
                     self.notify()
+                    return True
+        return False
 
     async def _save_inline_request(self):
         self.data['inline_request'] = self.inline.dump(self.inline_service)
@@ -471,6 +504,8 @@ class Controller:
         return None
 
     def _next_inline_window(self, now):
+        if not self.inline_requests_allowed:
+            return None
         return self.inline.next_window(now, self._latest_inline_plan(now))
 
     def _inline_status(self):
@@ -479,9 +514,11 @@ class Controller:
         current = self._latest_inline_plan(now)
         details = offer or current or {}
         if self.data['inline_restore']:
-            active = self.inline_active_until is not None and now < self.inline_active_until
+            active = self.inline_requests_allowed and self.inline_active_until is not None and now < self.inline_active_until
             return {**details, 'state': 'Permitted' if active else 'Returning to 0 kW',
                     'end': self.inline_active_until}
+        if not self.data['inline_requests_enabled']:
+            return {**details, 'state': 'Requests blocked'}
         if offer:
             next_window = self._next_inline_window(now)
             return {**offer, 'state': 'Approved' if self.inline.approved else 'Awaiting approval',
@@ -491,7 +528,7 @@ class Controller:
         return {**details, 'state': 'Planned' if current else 'Off'}
 
     async def _offer_inline(self, now):
-        if not self.inline_service or not self.data['enabled'] or self.stopping:
+        if not self.inline_service or not self.inline_approval_entity or not self.inline_requests_allowed:
             return
         plan = self._latest_inline_plan(now)
         if self.inline.offer or not plan:
@@ -502,9 +539,10 @@ class Controller:
             return
         if not self.hass.services.has_service('notify', self.inline_service):
             return
-        notification = self.inline.notification({'windows': windows, 'horizon_end': plan['horizon_end']}, zone)
+        notification = self.inline.notification({'windows': windows, 'horizon_end': plan['horizon_end']},
+                                                zone, self.inline_approval_entity)
         await self._save_inline_request()
-        if not self.data['enabled'] or self.stopping or not request_due(max(now, self.clock()), windows[0]['start'], zone):
+        if not self.inline_requests_allowed or not request_due(max(now, self.clock()), windows[0]['start'], zone):
             self.inline.clear()
             await self._save_inline_request()
             return
@@ -520,7 +558,7 @@ class Controller:
         now = self.clock()
         if not self._write_window_open(now) or self.stopping:
             return False
-        if window and (not self.data['enabled'] or now >= window['start'] + START_GRACE):
+        if window and (not self.inline_requests_allowed or now >= window['start'] + START_GRACE):
             return False
         if window:
             # Persist consumption and restoration together before the cloud call.
@@ -532,7 +570,7 @@ class Controller:
         self.data['inline_zero_requested'] = None
         await self.store.async_save(dict(self.data))
         try:
-            if self.stopping or (window and (not self.data['enabled']
+            if self.stopping or (window and (not self.inline_requests_allowed
                     or self.clock() >= window['start'] + START_GRACE)):
                 return False
             await self.hass.services.async_call(
@@ -558,7 +596,7 @@ class Controller:
         if self.data['inline_restore'] and await self._confirmed_inline_off(cap, off, now):
             return False
         if self.data['inline_restore']:
-            if self.inline_active_until is None or not self.data['enabled'] or now >= self.inline_active_until - 60:
+            if self.inline_active_until is None or not self.inline_requests_allowed or now >= self.inline_active_until - 60:
                 if off:
                     await self._set_inline_cap(off)
                 self.control['inline_approval'] = self._inline_status()
@@ -596,6 +634,7 @@ class Controller:
             return False
         self.data['inline_restore'] = False
         self.data['inline_zero_requested'] = None
+        self.inline_active_until = None
         await self.store.async_save(dict(self.data))
         return True
 

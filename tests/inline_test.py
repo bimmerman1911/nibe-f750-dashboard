@@ -158,6 +158,7 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
         self.clock = lambda: self.hass.time
         self.predictor = Predictor({'inline_notify_service': 'mobile_app_test', 'inline_max_kw': 6.5})
         self.controller = runtime.Controller(self.hass, clock=self.clock, predictor=self.predictor)
+        self.controller.inline_approval_entity = 'button.nibe_inline_approval'
         self.offer = {'start': NOW+1200, 'end': NOW+2160, 'kw': 6.5, 'estimated_cost': 1.23}
         self.later = {'start': NOW+4800, 'end': NOW+5760, 'kw': 6.5, 'estimated_cost': .65}
         self.plan = {'windows': [self.offer, self.later], 'horizon_end': NOW+43200}
@@ -233,6 +234,73 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
         await self.tick(self.later['end']+60)
         self.assertEqual(self.cap_writes, ['6.50 kw','0.0 kw','6.50 kw','0.0 kw'])
         self.assertEqual(len(self.notifications), 1)
+
+    async def test_tap_links_to_current_plan_and_local_approval_shares_deadline(self):
+        self.controller.inline_approval_entity = 'button.renamed_nibe_approval'
+        await self.ask()
+        notification, = self.notifications
+        self.assertIn('Press and hold for actions or tap to review', notification['message'])
+        self.assertEqual(notification['data']['url'], '/?more-info-entity-id=button.renamed_nibe_approval')
+        self.assertEqual(notification['data']['clickAction'], notification['data']['url'])
+        self.assertTrue(self.controller.inline_approval_pending)
+        self.assertTrue(await self.controller.async_respond_inline(approve_current=True))
+        self.assertTrue(Store.saved['inline_request']['approved'])
+        self.assertFalse(await self.controller.async_respond_inline(approve_current=True))
+
+    async def test_disabling_requests_invalidates_offer_without_hiding_estimate(self):
+        actions = await self.ask()
+        async def no_tick():
+            pass
+        self.controller.async_tick = no_tick
+        await self.controller.async_enable_inline_requests(False)
+        await self.answer(actions[0]['action'])
+        self.assertFalse(await self.controller.async_respond_inline(approve_current=True))
+        self.assertFalse(Store.saved['inline_requests_enabled'])
+        self.assertIsNone(Store.saved['inline_request']['offer'])
+        await self.controller._offer_inline(NOW+30)
+        self.assertEqual(len(self.notifications), 1)
+        self.assertEqual(self.controller._inline_status()['state'], 'Requests blocked')
+        self.assertEqual(self.controller._latest_inline_plan(NOW), self.plan)
+        await self.tick(self.offer['start'])
+        self.assertEqual(self.cap_writes, [])
+
+    async def test_disabled_switch_survives_restart_and_requires_a_new_approval(self):
+        actions = await self.ask()
+        async def no_tick():
+            pass
+        self.controller.async_tick = no_tick
+        await self.controller.async_enable_inline_requests(False)
+        self.hass.bus = SimpleNamespace(async_listen=lambda *_: lambda: None)
+        restored = runtime.Controller(self.hass, clock=self.clock, predictor=self.predictor)
+        restored.async_tick = no_tick
+        restored.inline_approval_entity = self.controller.inline_approval_entity
+        await restored.async_start()
+        self.controller = restored
+        self.publish(NOW)
+        self.assertFalse(restored.inline_requests_allowed)
+        await restored._offer_inline(NOW)
+        self.assertEqual(len(self.notifications), 1)
+        await restored.async_enable_inline_requests(True)
+        fresh_actions = await self.ask()
+        self.assertNotEqual(actions[0]['action'], fresh_actions[0]['action'])
+        await self.answer(actions[0]['action'])
+        self.assertFalse(restored.inline.approved)
+        await self.answer(fresh_actions[0]['action'])
+        self.assertTrue(restored.inline.approved)
+
+    async def test_disabling_during_active_run_preserves_write_spacing_and_restores_zero(self):
+        actions = await self.ask()
+        await self.answer(actions[0]['action'])
+        await self.tick(self.offer['start'])
+        async def no_tick():
+            pass
+        self.controller.async_tick = no_tick
+        await self.controller.async_enable_inline_requests(False)
+        self.assertTrue(Store.saved['inline_restore'])
+        await self.tick(self.offer['start']+900)
+        self.assertEqual(self.cap_writes, ['6.50 kw'])
+        await self.tick(self.offer['start']+902)
+        self.assertEqual(self.cap_writes, ['6.50 kw', '0.0 kw'])
 
     async def test_late_reply_defaults_to_off(self):
         actions = await self.ask()

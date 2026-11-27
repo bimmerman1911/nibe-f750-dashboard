@@ -71,6 +71,10 @@ Smart Control first plans with the compressor alone. It considers inline heat if
 
 The phone normally gets one request about an hour before the first window. Requests that would fall between 22:00 and 06:00 local time are sent from 21:45 if the forecast already shows the need. New overnight estimates can be requested from 06:00 for windows still ahead. **Approve plan** covers every listed window. Later forecasts can skip a listed window if it is no longer needed. Extra windows and extensions require a new approval after the original horizon ends. **Decline**, no reply or a reply at or after the first start leaves the cap at 0 kW for that plan.
 
+On iPhone, press and hold the notification to reveal **Approve plan** and **Decline**. A normal tap opens **Approve NIBE inline plan** in Home Assistant, where you can review the pending request and press the approval button before its deadline.
+
+Use **Block inline requests** beside **Pause control** to stop requests and revoke pending or unused approvals. Estimates stay visible. If an approved run is active, Smart Control restores the cap to 0 kW at the next permitted write. **Allow inline requests** reopens the approval process, and the setting is saved across restarts.
+
 Windows start on a price-quarter boundary. Each window is modeled over 16 minutes, with consecutive selected quarters combined into one run. The existing 902-second write separation and one-minute polling can shift the actual start and restoration. The approved value is a power cap. NIBE determines heater staging and demand. The controller restores 0 kW at the first permitted end-of-window write and waits for the reported value to confirm it. A Home Assistant or myUplink outage can delay restoration, including after an approved run. A Home Assistant restart preserves the plan decision and gives closing the cap priority if a previous write might have left it open.
 
 ## Indoor temperature history and plan — v0.29.0
