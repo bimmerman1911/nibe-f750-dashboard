@@ -22,13 +22,36 @@ class AirTests(unittest.TestCase):
     def test_coefficient_is_calibrated_only_after_ten_minutes(self):
         m=calibrated();self.assertEqual(len(m.observations),1)
         self.assertAlmostEqual(m.observations[0]['k'],80/(160*36.5))
-        a=m.estimate(states(NOW+600),NOW+600,120,20)
-        b=m.estimate(states(NOW+600,flow=80),NOW+600,120,20)
+        t = NOW + 600 + 2*86400
+        a=m.estimate(states(t),t,120,20)
+        b=m.estimate(states(t,flow=80),t,120,20)
         self.assertTrue(a['calibrated']);self.assertAlmostEqual(a['effective_max_hz'],2*b['effective_max_hz'])
         self.assertLess(a['effective_max_hz'],80)
-        self.assertEqual(m.estimate(states(NOW+600),NOW+600,60,20)['effective_max_hz'],60)
-        c=m.estimate(states(NOW+600,tin=15),NOW+600,120,20)
+        self.assertEqual(m.estimate(states(t),t,60,20)['effective_max_hz'],60)
+        c=m.estimate(states(t,tin=15),t,120,20)
         self.assertLess(c['effective_max_hz'],a['effective_max_hz'])
+
+    def test_recent_sustained_space_heat_corrects_a_low_calibrated_limit(self):
+        m = calibrated()
+        for i in range(15, 26):
+            m.update(states(NOW+i*60, hz=88, evap=-18.7), NOW+i*60)
+        for i in range(26, 37):
+            m.update(states(NOW+i*60, hz=100, mode='Hot water'), NOW+i*60)
+
+        t = NOW + 36*60
+        result = m.estimate(states(t, hz=100, mode='Hot water'), t, 120, 20)
+        self.assertEqual(result['source'], 'Recent sustained space heating')
+        self.assertEqual(result['effective_max_hz'], 88)
+        self.assertEqual(m.estimate(states(t), t, 83, 20)['effective_max_hz'], 83)
+        cooler = m.estimate(states(t, flow=150, tin=19), t, 120, 20)
+        self.assertAlmostEqual(cooler['effective_max_hz'], 88 * (150/160) * (35.5/36.5))
+        warmer = m.estimate(states(t, flow=165, tin=20.5), t, 120, 20)
+        self.assertEqual(warmer['effective_max_hz'], 88)
+
+        later = t + 86400
+        expired = m.estimate(states(later), later, 120, 20)
+        self.assertEqual(expired['source'], 'Calibrated evaporator limit')
+        self.assertLess(expired['effective_max_hz'], 80)
 
     def test_plateau_without_cold_evaporator_or_demand_is_not_a_limit(self):
         for kwargs in ({'evap':-5},{'dm':-20},{'mode':'Hot water'}):

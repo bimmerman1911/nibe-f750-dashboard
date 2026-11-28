@@ -116,21 +116,28 @@ class AirLimit:
         recent=[r for r in self.observations if 0<=now-r['time']<=14*86400]
         usable=flow is not None and tin is not None and 50<=flow<=500 and 6<=tin<=40
         k=median(r['k'] for r in recent) if recent else None
+        sustained = self.sustained
+        sustained_age = now - sustained['time'] if sustained else None
+        sustained_cap = None
+        # Keep the observed speed as evidence of achievable operation. Derate
+        # it for colder air or lower airflow without extrapolating it upwards.
+        if not explicit_low and sustained_age is not None and 0 <= sustained_age <= 14*86400:
+            scale = min(1., flow / sustained['flow']) if flow is not None and 50 <= flow <= 500 else 1.
+            if tin is not None and 6 <= tin <= 40:
+                scale *= min(1., (tin - FLOOR) / (sustained['tin'] - FLOOR))
+            sustained_cap = min(reported, sustained['hz'] * scale)
         if usable and k is not None:
             cap=min(reported,.95*k*flow*(tin-(FLOOR+.5)))
             source='Calibrated evaporator limit'
+            if sustained_cap is not None and sustained_age <= 86400 and sustained_cap > cap:
+                cap = sustained_cap
+                source = 'Recent sustained space heating'
+        elif sustained_cap is not None:
+            cap = sustained_cap
+            source = 'Provisional sustained observation'
         else:
-            # A sustained speed is evidence of achievable operation, not its
-            # maximum. Use it provisionally rather than assuming 120 Hz.
-            r=self.sustained
-            if not explicit_low and r and 0<=now-r['time']<=14*86400:
-                scale=min(1.,flow/r['flow']) if flow is not None and 50<=flow<=500 else 1.
-                if tin is not None and 6<=tin<=40:scale*=min(1.,(tin-FLOOR)/(r['tin']-FLOOR))
-                cap=min(reported,r['hz']*scale)
-                source='Provisional sustained observation'
-            else:
-                cap=None;source='Awaiting qualified capacity evidence'
-        return {'source':source,'calibrated':source=='Calibrated evaporator limit','coefficient':k,
+            cap=None;source='Awaiting qualified capacity evidence'
+        return {'source':source,'calibrated':usable and k is not None,'coefficient':k,
                 'observations':len(recent),'floor_assumption_c':FLOOR,'floor_margin_c':.5,
                 'frequency_margin':.95,'airflow_m3h':flow,'inlet_c':tin,
                 'airflow_source':flow_source if flow is not None else 'Unavailable','airflow_age_seconds':flow_age if flow is not None else None,

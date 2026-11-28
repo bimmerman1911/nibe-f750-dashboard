@@ -29,6 +29,8 @@ Smart Control uses 2.4 kW as the default estimate at full speed during active sp
 
 Since v0.34.5, the planner estimates typical output from the weighted median of closely matched cycles. Unusually long defrosts can influence the estimate once at least three comparable cycles show that pattern. When evidence is sparse, it uses the provisional output.
 
+Since v0.34.6, sustained space heating observed in the previous 24 hours can raise the estimated evaporator limit. The planner reduces the observed speed for colder extract air or lower airflow and respects the F750's current reported maximum.
+
 On upgrade, the room model converts its existing fit to the new compressor reference and keeps learning from local measurements. Recent cold nights can provide a provisional heat-loss coefficient if a refit better predicts their cooling in leave-one-out checks. A validated overnight fit takes precedence.
 
 ## Local outdoor forecast — v0.34.1
