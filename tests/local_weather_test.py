@@ -1,100 +1,102 @@
-"""Verify as-issued forecast scoring, holdout selection and planner inputs."""
-from datetime import datetime, timezone
+"""Check the empirical SMHI correction and the planner's weather inputs."""
+from datetime import datetime, timedelta, timezone
+from math import cos, tau
+from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase, main
 from unittest.mock import patch
-from zoneinfo import ZoneInfo
 
-from integration_test import load, Store
+from integration_test import load
 import predictive_test
 
 weather = load('local_weather')
 predictor_module = predictive_test.f
-BASE = 1795622400
-UTC = ZoneInfo('UTC')
 
 
-def seed(model, bias):
-    """Populate eight days of genuinely prior forecasts."""
-    for day in range(8):
-        for hour in range(24):
-            target = BASE + (day * 24 + hour) * 3600
-            at = datetime.fromtimestamp(target, UTC).hour
-            outdoor = -7.5 if (day + hour) % 2 else 2.5
-            actual = outdoor + bias(day, at, outdoor)
-            for lead in (24, 12, 6, 2):
-                model.record('weather.smhi', [(target, outdoor)], target - lead * 3600)
-            model.observe(target + 60, actual, target + 60)
-    return BASE + 8 * 86400
+def slot_at(when):
+    t = datetime.fromisoformat(when).timestamp()
+    return {'start': t - 450, 'end': t + 450, 'outdoor': 0.}
 
 
-class CalibrationTests(TestCase):
-    def test_pairs_existing_forecast_only_and_restores(self):
-        model = weather.LocalWeather()
-        model.record('weather.smhi', [(BASE, -3)], BASE - 2 * 3600 - 300)
-        model.record('weather.smhi', [(BASE, -4)], BASE - 2 * 3600)
-        model.record('weather.smhi', [(BASE, -10)], BASE + 60)
-        model.observe(BASE - 60, -8, BASE + 60)
-        self.assertFalse(model.observed)
-        restored = weather.LocalWeather()
-        restored.restore(model.dump(), BASE + 60)
-        restored.observe(BASE + 120, -7, BASE + 120)
-        restored.observe(BASE + 360, -3, BASE + 360)
-        self.assertEqual(restored.observed, {(BASE, 2): (-4, -7)})
-        restored.record('weather.changed', [], BASE + 600)
-        self.assertFalse(restored.observed)
+class CorrectionTests(TestCase):
+    def test_default_cycle_matches_the_supplied_table(self):
+        slots = [slot_at(f'2026-11-28T{hour:02}:00:00+01:00') for hour in range(0, 24, 3)]
+        settings = weather.correct_outdoor(slots, {})
+        self.assertEqual(settings['timezone'], 'Europe/Stockholm')
+        self.assertEqual([round(slot['outdoor'], 2) for slot in slots],
+                         [-1.78, -1.92, -1.78, -1.45, -1.12, -.98, -1.12, -1.45])
+        self.assertTrue(all(slot['outdoor_raw'] == 0. for slot in slots))
 
-    def test_heldout_patterns_distinguish_night_and_cold_weather(self):
-        model = weather.LocalWeather()
-        now = seed(model, lambda _, hour, outdoor: -.7 - (1.5 if hour < 8 else 0) - (.8 if outdoor < 0 else 0))
-        profiles, stats = model.calibrate(now, UTC)
-        self.assertEqual(set(profiles), set(weather.LEADS))
-        self.assertTrue(stats['12']['uses_patterns'])
-        midnight = BASE - BASE % 86400
-        noon = midnight + 12 * 3600
-        night = midnight + 2 * 3600
-        self.assertLess(weather.correction(profiles, UTC, night, -7.5, 12),
-                        weather.correction(profiles, UTC, noon, -7.5, 12))
-        self.assertLess(weather.correction(profiles, UTC, noon, -7.5, 12),
-                        weather.correction(profiles, UTC, noon, 2.5, 12))
-        self.assertLess(stats['12']['corrected_mae_c'], stats['12']['raw_mae_c'])
-        slots = [{'start': now, 'end': now + 60, 'outdoor': -4.},
-                 {'start': now + 6 * 3600, 'end': now + 6 * 3600 + 60, 'outdoor': -4.}]
-        model.adjust(slots, [(now, -4), (now + 3600, -4)], -8., now, UTC)
-        self.assertAlmostEqual(slots[0]['outdoor'], -8., delta=.03)
-        self.assertLess(slots[1]['outdoor'], -4.)
-        self.assertEqual(slots[1]['outdoor_raw'], -4.)
+    def test_custom_decimal_peak_uses_stockholm_time_in_winter_and_summer(self):
+        slots = [slot_at('2026-01-15T13:30:00+00:00'), slot_at('2026-07-15T12:30:00+00:00')]
+        weather.correct_outdoor(slots, {'temperature_offset': -2., 'daily_amplitude': .8, 'peak_hour': 14.5})
+        for slot in slots:
+            self.assertAlmostEqual(slot['outdoor'], -1.2)
 
-    def test_unstable_bias_stays_disabled(self):
-        model = weather.LocalWeather()
-        now = seed(model, lambda day, *_: -3. if day < 5 else 1.)
-        self.assertFalse(model.calibrate(now, UTC)[0])
+    def test_both_occurrences_of_a_repeated_local_hour_get_the_same_correction(self):
+        slots = [slot_at('2026-10-25T02:30:00+02:00'), slot_at('2026-10-25T02:30:00+01:00')]
+        weather.correct_outdoor(slots, {})
+        self.assertEqual(slots[1]['outdoor'], slots[0]['outdoor'])
+
+    def test_invalid_forecast_temperatures_are_skipped_and_valid_zero_is_preserved(self):
+        samples = [{'datetime': predictive_test.iso(predictive_test.BASE + i*3600), 'temperature': value}
+                   for i, value in enumerate((32, 'unavailable', None, 'NaN', 'inf', 50))]
+        self.assertEqual(predictive_test.p.weather_points(samples, '°F'),
+                         [(predictive_test.BASE, 0.), (predictive_test.BASE + 5*3600, 10.)])
 
 
 class ForecastTests(IsolatedAsyncioTestCase):
-    async def test_planner_receives_and_returns_local_temperatures(self):
-        Store.other = {}
+    async def run_forecast(self, forecast, sensor_value, sensor_age=0, current=0):
         hass, states, calls = predictive_test.SourceTests().make()
-        bt1 = states['sensor.vp_current_outd_temp_bt1']
-        bt1.state = '-2'
+        now = predictive_test.BASE
+        states['sensor.vp_current_outd_temp_bt1'].state = '-12'
+        states['weather.home'].attributes['temperature'] = current
+        states[weather.SMHI_TEMPERATURE] = SimpleNamespace(
+            state=sensor_value, attributes={'unit_of_measurement': '°C'},
+            last_reported=datetime.fromtimestamp(now, timezone.utc) - timedelta(seconds=sensor_age))
+
+        async def get_forecast(domain, service, data, **_kwargs):
+            calls.append((domain, service))
+            return {'weather.home': {'forecast': forecast}}
+
+        hass.services.async_call = get_forecast
         predictor = predictor_module.Predictor(hass, {'weather_entity': 'weather.home'})
-        seen = []
 
         def plan(slots, *_args, **_kwargs):
-            seen.extend(slots)
             return {'steps': slots, 'horizon_end': slots[-1]['end']}
 
-        now = predictive_test.BASE
-        with patch.object(predictor_module, 'joint_plan', side_effect=plan):
+        with patch.object(predictor_module, 'joint_plan', side_effect=plan) as planner:
             result = await predictor.async_update(states, now)
-        self.assertTrue(seen)
         self.assertEqual(calls, [('weather', 'get_forecasts')])
-        self.assertEqual(result['steps'][0]['outdoor_raw'], 0.)
-        self.assertLess(result['steps'][0]['outdoor'], -1.8)
-        self.assertEqual(result['steps'][24]['outdoor'], 0.)
-        self.assertEqual(result['local_weather']['anchor_c'], -2.)
-        self.assertTrue(Store.other['nibe_f750.local_weather']['pending'])
-        # The source's pending forecasts persist before their valid time.
-        self.assertTrue(all(row[0] > now for row in Store.other['nibe_f750.local_weather']['pending']))
+        return result, planner.called
+
+    async def test_current_smhi_reading_replaces_the_now_point_and_future_uses_hourly_data(self):
+        result, planned = await self.run_forecast(predictive_test.weather(), '8')
+        self.assertTrue(planned)
+        first, later = result['steps'][0], result['steps'][24]
+        self.assertGreater(first['outdoor_raw'], 6.)
+        self.assertEqual(later['outdoor_raw'], 0.)
+        for step in (first, later):
+            local = datetime.fromtimestamp((step['start'] + step['end']) / 2, weather.STOCKHOLM)
+            hour = local.hour + local.minute / 60 + local.second / 3600
+            self.assertAlmostEqual(step['outdoor'], step['outdoor_raw'] - 1.45 + .47*cos(tau*(hour-15)/24))
+
+    async def test_missing_or_stale_smhi_uses_valid_hourly_data(self):
+        for value, age in [('unavailable', 0), ('NaN', 0), ('8', 1900)]:
+            with self.subTest(value=value, age=age):
+                result, planned = await self.run_forecast(predictive_test.weather(), value, age, current=9)
+                self.assertTrue(planned)
+                self.assertEqual(result['steps'][0]['outdoor_raw'], 0.)
+
+    async def test_weather_entity_current_temperature_bridges_to_first_future_hour(self):
+        result, planned = await self.run_forecast(predictive_test.weather()[2:], 'unknown', current=-3)
+        self.assertTrue(planned)
+        self.assertLess(result['steps'][0]['outdoor_raw'], -2.5)
+
+    async def test_missing_weather_start_clears_the_schedule(self):
+        result, planned = await self.run_forecast(predictive_test.weather()[2:], 'unknown', current=None)
+        self.assertFalse(planned)
+        self.assertEqual(result['steps'], [])
+        self.assertIn('No continuous known-price and weather interval', result['message'])
 
 
 if __name__ == '__main__':

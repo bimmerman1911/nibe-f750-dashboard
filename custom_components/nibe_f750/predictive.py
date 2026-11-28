@@ -52,12 +52,25 @@ def prices(rows, unit):
     return result
 
 
+def temperature_c(value, unit):
+    if unit not in ('°C','°F'):
+        return None
+    try:
+        value = numeric(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return (value - 32) * (5/9) if unit == '°F' else value
+
+
 def weather_points(weather, unit):
     if unit not in ('°C','°F'):
         raise ValueError('Weather temperature units are missing')
-    forecast = sorted([(timestamp(w['datetime']), numeric(w['temperature'])) for w in weather])
-    if unit == '°F':
-        forecast = [(t,(v-32)*5/9) for t,v in forecast]
+    forecast = []
+    for row in weather:
+        temperature = temperature_c(row.get('temperature'), unit)
+        if temperature is not None:
+            forecast.append((timestamp(row['datetime']), temperature))
+    forecast.sort()
     if any(forecast[i][0] == forecast[i-1][0] for i in range(1,len(forecast))):
         raise ValueError('Duplicate forecast timestamps')
     return forecast

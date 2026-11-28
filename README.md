@@ -33,17 +33,17 @@ Since v0.34.6, sustained space heating observed in the previous 24 hours can rai
 
 On upgrade, the room model converts its existing fit to the new compressor reference and keeps learning from local measurements. Recent cold nights can provide a provisional heat-loss coefficient if a refit better predicts their cooling in leave-one-out checks. A validated overnight fit takes precedence.
 
-## Local outdoor forecast — v0.34.1
+## Local outdoor estimate — v0.35.0
 
-Smart Control saves the weather forecast before each hour and compares it with the F750’s BT1 reading when that hour arrives. It checks whether the source tends to be warmer or colder at different times of day, forecast temperatures and lead times. It applies a learned correction only where it improves the forecast on separate recent days. The most recent BT1 reading still anchors the first two hours.
+The planner estimates the F750’s outdoor BT1 temperature by applying `offset + amplitude × cos(2π × (hour − peak) / 24)` to SMHI temperatures. It uses `sensor.utetemperatur_smhi` for the current reading when available and the selected hourly weather entity for upcoming temperatures. The defaults are **−1.45°C**, **0.47°C** and **15.0** in Europe/Stockholm local time, including daylight saving time. All three are in the integration options.
 
-The Outdoor forecast chart shows the local estimate used by the planner and the source forecast. Learning starts after the update and needs at least six days with enough paired readings for a given lead time. It is saved across restarts.
+The Outdoor forecast chart shows the corrected estimate and the source temperatures. Missing readings can be covered by the hourly weather data. If the data cannot cover the forecast start, Smart Control falls back to temperature control. The correction is an empirical fit evaluated on autumn and early winter data.
 
 ## Overnight heat loss and sustained compressor output — v0.34.0
 
 Smart Control learns the building’s heat-loss coefficient from 6–12 hour overnight energy balances. It compares estimated space heat with indoor–outdoor degree-hours and the room-temperature change. Hot-water charging and defrost time stay in the balance with zero new space heat. Windows containing inline-heater use are excluded.
 
-The model estimates compressor heat from myUplink airflow, BT20, BT21, BT12 and compressor frequency. It averages output over complete defrost cycles and uses comparable airflow, supply temperature, outdoor temperature and compressor limits to estimate sustained capacity. When that capacity is needed to hold rooms near the configured minimum, the planner preserves heating demand. The locally measured BT1 temperature anchors the start of the outdoor forecast.
+The model estimates compressor heat from myUplink airflow, BT20, BT21, BT12 and compressor frequency. It averages output over complete defrost cycles and uses comparable airflow, supply temperature, outdoor temperature and compressor limits to estimate sustained capacity. When that capacity is needed to hold rooms near the configured minimum, the planner preserves heating demand.
 
 On update, Smart Control reads available Recorder data in the background and continues learning from live observations. The overnight fit replaces the existing loss coefficient after it predicts separate cold nights with enough variation in the training data. Integration diagnostics show the sample coverage, validation status and estimated sustained output. Air-side heat is an estimate of sensible heat recovery and omits latent heat from moisture.
 
