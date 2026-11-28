@@ -232,15 +232,18 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
         for key in ('heat_loss_kw_per_k', 'thermal_capacity_kwh_per_k', 'internal_gain_kw'):
             m[key] = building[key]
         m['heating_lag_hours'] = 1.
+    elif 'provisional_heat_loss_kw_per_k' in building:
+        m['heat_loss_kw_per_k'] = building['provisional_heat_loss_kw_per_k']
     # Keep the native speed and supply simulation on its learned scale.
     # Apply observed sustained capacity to the heat reaching the rooms.
     def heat_ratio(chunk):
         sustained = chunk.get('sustained_heat_kw')
         if sustained is None:
             sustained = building.get('sustained_heat_kw')
-        return 1. if sustained is None else min(1., sustained / cap)
+        return 1. if sustained is None else sustained / cap
 
-    stored_heat = m.get('initial_heat_kw', sample['heat']) * heat_ratio(slots[0])
+    stored_heat = (m['initial_heat_kw'] if m.get('active_compressor_heat_kw') is not None
+                   else m['initial_heat_kw'] * heat_ratio(slots[0]))
     if building.get('stored_heat_kw') is not None:
         stored_heat = building['stored_heat_kw']
         m['heating_lag_hours'] = 1.
@@ -582,7 +585,7 @@ def _search(slots, states, now, model=None, response=None, min_hz=20., max_hz=84
                 'secondary':{'offset':C2,'target':'sensor.vp_calculated_supply_climate_system_2','role':'mixing-valve target; indirect load on primary circuit'}},
             'search_limited':limited,'comfort_margin_c':uncertainty,'known_hours':(end-now)/3600,'frequency_limit':m.get('air_limit'),'available_compressor_heat_kw':cap,'frequency_reference_hz':reference_hz,'short_horizon':end-now<21600,
             'native_tank_goal_limited':native_goal_limited,'requested_tank_target_c':requested_tank_target,'terminal_heat_value_sek_per_kwh':heat_price,
-            'heat_basis':building.get('source') if validated or building.get('sustained_heat_kw') is not None else 'Frequency-based nominal heat; not metered',
+            'heat_basis':building.get('capacity_source', building.get('source')) if validated or building.get('sustained_heat_kw') is not None else 'Frequency-based nominal heat; not metered',
             'building_heat_loss':building, 'available_building_heat_kw':cap*heat_ratio(slots[0])},
         'selection_score':[best.violation,best.cost+terminal(best)],
         'morning_shortfall':best.shortfall,'comfort_risk':best.comfort_risk,'recovery':asdict(completed[id(best)]),

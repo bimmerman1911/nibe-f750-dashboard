@@ -92,6 +92,8 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
         result=await predictor.async_update(states,BASE)
         self.assertEqual(result['status'],'Adaptive schedule')
         self.assertTrue(result['tomorrow_unavailable'])
+        self.assertEqual(result['steps'][0]['sustained_heat_kw'], 2.)
+        self.assertEqual(result['planning']['available_building_heat_kw'], 2.)
         self.assertEqual(calls,[('weather','get_forecasts')])
         await predictor.async_update(states,BASE+60)
         self.assertEqual(len(calls),1)

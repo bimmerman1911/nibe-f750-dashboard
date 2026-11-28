@@ -23,6 +23,12 @@ Existing installations only need the Marketplace update, HA restart and browser 
 
 The integration registers its bundled cards automatically. For YAML-mode dashboards, remove old NIBE resource URLs to avoid loading an outdated duplicate.
 
+## Provisional compressor output — v0.34.4
+
+Smart Control uses 2.4 kW as the default estimate at full speed during active space heating. The room learner uses the airflow and temperature estimate when available. The planner uses a provisional 2.0 kW sustained space-heating estimate at 70 Hz, reduced if the compressor is limited below that speed. Closely matched observed defrost cycles take precedence. Hot-water charging is simulated separately.
+
+On upgrade, the room model converts its existing fit to the new compressor reference and keeps learning from local measurements. Recent cold nights can provide a provisional heat-loss coefficient if a refit better predicts their cooling in leave-one-out checks. A validated overnight fit takes precedence.
+
 ## Local outdoor forecast — v0.34.1
 
 Smart Control saves the weather forecast before each hour and compares it with the F750’s BT1 reading when that hour arrives. It checks whether the source tends to be warmer or colder at different times of day, forecast temperatures and lead times. It applies a learned correction only where it improves the forecast on separate recent days. The most recent BT1 reading still anchors the first two hours.

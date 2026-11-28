@@ -11,6 +11,33 @@ building = load('building')
 
 
 class BuildingTests(unittest.TestCase):
+    def test_sparse_or_milder_cycles_use_the_sustained_fallback(self):
+        sample = {'heat_kw': 1.65, 'outside': -2., 'supply': 32.,
+                  'flow': 147., 'limit': 71., 'defrost_fraction': .15}
+        estimate = building.planning_capacity([sample] * 4, -10., 32., 147., 71., 2.4)
+        self.assertEqual(estimate['heat_kw'], 2.)
+        self.assertEqual(estimate['source'], 'Provisional sustained output')
+        self.assertIsNone(estimate['defrost_minutes_per_hour'])
+        self.assertEqual(building.planning_capacity([], -10., 32., 147., 56., 2.4)['heat_kw'], 1.6)
+        observed = building.planning_capacity([sample] * 3, -2., 32., 147., 71., 2.4)
+        self.assertEqual(observed['heat_kw'], 1.65)
+        self.assertEqual(observed['source'], 'Observed defrost cycles')
+
+    def test_provisional_fit_uses_delivered_heat_and_actual_cooling(self):
+        model = building.BuildingModel('Europe/Stockholm')
+        prior = {'heat_loss_kw_per_k': .1, 'thermal_capacity_kwh_per_k': 9.,
+                 'internal_gain_kw': .5}
+        for day, (lift, change) in enumerate(((20., -.2), (23., -.7), (25., -1.5)), 1):
+            energy = .145 * lift * 9 + 9 * change - .5 * 9
+            model.nights.append(building.Night(day, 9., lift * 9, energy, change, change))
+        result = model.estimate(NOW, prior)
+        self.assertFalse(result['validated'])
+        self.assertAlmostEqual(result['provisional_heat_loss_kw_per_k'], .145)
+        states = readings(room=19.5, tank=53., q=4.2)
+        plan = joint._search(timeline(count=8, outdoor=-7.), states, NOW,
+                            {**MODEL, 'building_heat_loss': result}, width=1, strategy='flex')
+        self.assertAlmostEqual(plan['model']['heat_loss_kw_per_k'], .145)
+
     def test_complete_defrost_cycle_counts_lost_heat_and_ramp(self):
         model = building.BuildingModel('Europe/Stockholm')
         reading = building.Reading(NOW, (19., 19.), -7., 2.6, 0., 75., 75.,

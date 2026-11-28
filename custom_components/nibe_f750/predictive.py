@@ -10,6 +10,17 @@ DEFAULTS = {'heat_loss_kw_per_k': .10, 'thermal_capacity_kwh_per_k': 9.,
             'tank_min_c': 42., 'tank_max_c': 52., 'tank_target_c': 48.,
             'tank_capacity_kwh_per_k': .209, 'dhw_draw_kw': .15}
 
+# DEFAULTS also defines the units of the existing native offset simulation.
+ACTIVE_COMPRESSOR_HEAT_KW = 2.4
+
+
+def active_compressor_heat(options):
+    if options and 'active_compressor_heat_kw' in options:
+        return options['active_compressor_heat_kw']
+    saved = (options or {}).get('compressor_heat_kw')
+    # Older options forms saved the nominal default even when it was untouched.
+    return ACTIVE_COMPRESSOR_HEAT_KW if saved in (None, DEFAULTS['compressor_heat_kw']) else saved
+
 
 def timestamp(value):
     if isinstance(value, str):

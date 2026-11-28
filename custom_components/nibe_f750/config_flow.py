@@ -2,6 +2,7 @@
 import voluptuous as vol
 from homeassistant import config_entries
 from .controller import DOMAIN
+from .predictive import DEFAULTS, active_compressor_heat
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -36,18 +37,21 @@ class OptionsFlow(config_entries.OptionsFlow):
         if saved_phone not in phones:
             phones[saved_phone] = saved_phone + ' (unavailable)'
         if user_input is not None:
-            from .predictive import DEFAULTS
             values={**DEFAULTS, **user_input}
             if not (values['room_min_c']<=values['room_target_c']<=values['room_max_c'] and values['tank_min_c']<=values['tank_target_c']<=values['tank_max_c']):
                 return self.async_abort(reason='invalid_bounds')
-            return self.async_create_entry(title='', data=user_input)
-        from .predictive import DEFAULTS
+            options = dict(user_input)
+            if 'compressor_heat_kw' in self._entry.options:
+                options['compressor_heat_kw'] = self._entry.options['compressor_heat_kw']
+            return self.async_create_entry(title='', data=options)
         fields={vol.Optional('weather_entity', default=self._entry.options.get('weather_entity','')): str}
         fields[vol.Optional('inline_notify_service', default=saved_phone)] = vol.In(phones)
         fields[vol.Optional('inline_max_kw', default=self._entry.options.get('inline_max_kw', 6.5))] = vol.In(
             [n / 2 for n in range(1, 14)])
+        fields[vol.Optional('active_compressor_heat_kw', default=active_compressor_heat(self._entry.options))] = vol.All(
+            vol.Coerce(float), vol.Range(min=1, max=10))
         limits={'heat_loss_kw_per_k':(.01,1), 'thermal_capacity_kwh_per_k':(2,100),
-                'compressor_heat_kw':(1,10),'dhw_heat_kw':(1,10),'compressor_max_supply_diff_c':(1,25),
+                'dhw_heat_kw':(1,10),'compressor_max_supply_diff_c':(1,25),
                 'room_min_c':(16,23),'room_target_c':(17,24),'room_max_c':(18,25),
                 'tank_min_c':(35,50),'tank_target_c':(40,55),'tank_max_c':(46,60)}
         for key,(low,high) in limits.items():

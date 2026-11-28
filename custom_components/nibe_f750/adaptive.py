@@ -1,5 +1,6 @@
 """Online thermal identification from observed inputs; no external ML service."""
 from datetime import datetime, timezone
+from copy import deepcopy
 import math
 from .engine import ROOM1, ROOM2, PRIORITY, fresh, number
 from .predictive import DEFAULTS
@@ -29,7 +30,7 @@ class ThermalLearner:
 
     dT = a*integral(Tout-Troom) + b*integral(delivered-heat proxy) + c*dt.
     Multiple lag hypotheses are scored on pre-update prediction error. Parameters
-    describe effective response on the nominal heat-output basis, not metered COP.
+    describe effective response to estimated space heat.
     """
     def __init__(self, options=None):
         self.prior = {**DEFAULTS, **(options or {})}
@@ -37,7 +38,7 @@ class ThermalLearner:
         self.banks = [{'lag': lag, 'theta': [bounded(h/c,.0005,.15), bounded(1/c,.01,.5), 0.],
                        'p': [[.0002, 0., 0.], [0., .04, 0.], [0., 0., .02]],
                        'score': .1, 'heat': 0.} for lag in LAGS]
-        self.room_response = {"heating_kw":4.2,"heating_rate":0.,"coasting_rate":0.,"heating_hours":0.,"coasting_hours":0.}
+        self.room_response = {"heating_kw":self.prior['compressor_heat_kw'],"heating_rate":0.,"coasting_rate":0.,"heating_hours":0.,"coasting_hours":0.}
         self.heat_timestamp = None
         self.count = 0
         self.heating_windows = 0
@@ -74,6 +75,7 @@ class ThermalLearner:
     def dump(self):
         # Deliberately omit partial windows: never train across a restart/gap.
         return {'version': 1, 'banks': self.banks, 'count': self.count,
+                'compressor_heat_kw': self.prior['compressor_heat_kw'],
                 'room_response':dict(self.room_response),'heat_timestamp':self.heat_timestamp,
                 'heating_windows':self.heating_windows, 'cooling_windows':self.cooling_windows,
                 'last_learning_at':self.last_learning_at,'last_heating_at':self.last_heating_at,
@@ -85,14 +87,17 @@ class ThermalLearner:
                 'dhw_stop_observations':self.dhw_stop_observations,'dhw_charge_windows':self.dhw_charge_windows,
                 'heat_range': self.heat_range, 'outdoor_range': self.outdoor_range}
 
-    def restore(self, data):
+    def restore(self, data, legacy_compressor_heat_kw=None):
         """Reject corrupt model data; this never touches the cloud-write store."""
         if not data or data.get('version') != 1:
             return False
         try:
             fraction=data.get('dhw_fraction',.75);start=data.get('dhw_start_c',self.prior['tank_target_c'])
             assert .2<=fraction<=1 and 20<=start<=65
-            banks = data['banks']
+            saved_kw = data.get('compressor_heat_kw', legacy_compressor_heat_kw or DEFAULTS['compressor_heat_kw'])
+            assert type(saved_kw) in (float, int) and math.isfinite(saved_kw) and 0 < saved_kw <= 20
+            scale = self.prior['compressor_heat_kw'] / saved_kw
+            banks = deepcopy(data['banks'])
             assert len(banks) == len(LAGS)
             for bank, lag in zip(banks, LAGS):
                 assert bank['lag'] == lag and len(bank['theta']) == 3
@@ -132,7 +137,7 @@ class ThermalLearner:
             for key in ('banks','count','rejected','hours','selected','draw','draw_counts',
                         'dhw_capacity','tank_ceiling','heat_range','outdoor_range'):
                 if key in data:
-                    setattr(self,key,data[key])
+                    setattr(self,key,banks if key == 'banks' else data[key])
             self.dhw_fraction=fraction;self.dhw_start_c=start
             self.heating_windows=data.get('heating_windows',0)
             self.cooling_windows=data.get('cooling_windows',0)
@@ -145,17 +150,30 @@ class ThermalLearner:
             self.projection_last_window=data.get('projection_last_window',False)
             response=data.get('room_response',{})
             for k in self.room_response:
-                v=response.get(k,4.2 if k=='heating_kw' else 0.)
+                v=response.get(k,saved_kw if k=='heating_kw' else 0.)
                 assert isinstance(v,(int,float)) and math.isfinite(v) and (abs(v)<=.3 if k.endswith('rate') else 0<=v<=1e6)
                 self.room_response[k]=v
             timestamp=data.get('heat_timestamp',data.get('last_learning_at'))
             assert timestamp is None or (math.isfinite(timestamp) and timestamp>=0)
             self.heat_timestamp=timestamp
+            if scale != 1.:
+                # Transform the fitted input coefficient and its covariance
+                # together. This preserves the response to the same compressor
+                # fraction while subsequent windows refit on the new scale.
+                factors = (1., 1. / scale, 1.)
+                for bank in self.banks:
+                    bank['theta'][1] = bounded(bank['theta'][1] / scale, .01, .5)
+                    bank['p'] = [[value * factors[i] * factors[j]
+                                  for j, value in enumerate(row)] for i, row in enumerate(bank['p'])]
+                    bank['heat'] = bounded(bank['heat'] * scale, 0., 30.)
+                self.heat_range = [value * scale for value in self.heat_range]
+                self.room_response['heating_kw'] *= scale
+                self.revision += 1
             return True
         except (KeyError, TypeError, ValueError, AssertionError, ZeroDivisionError):
             return False
 
-    def observation(self, states, now, hour):
+    def observation(self, states, now, hour, observed_heat_kw=None):
         def value(e):
             state = states.get(e)
             return number(state.state) if fresh(state,now) else None
@@ -169,22 +187,25 @@ class ThermalLearner:
             or not -50<=outside<=50 or not 0<=freq<=150 or not 20<=maximum<=150 or not 0<=heater<=10):
             return None
         for e in ('sensor.vp_status','sensor.vp_status_compressor'):
-            if fresh(states.get(e),now) and 'defrost' in states[e].state.lower():
-                return None
+            if fresh(states.get(e),now) and any(word in states[e].state.lower() for word in ('defrost', 'avfrost')):
+                if observed_heat_kw is None:
+                    return None
+                observed_heat_kw = 0.
+                break
         water = [value(e) for e in TANK]
         tank = sum(water)/2 if all(v is not None and 10<=v<=80 for v in water) else None
-        heat = self.prior['compressor_heat_kw']*bounded(freq/maximum,0,1) + heater
+        heat = self.prior['compressor_heat_kw']*bounded(freq/maximum,0,1) if observed_heat_kw is None else observed_heat_kw
         mode_name = mode.state
         comfort = states.get('select.vp_comfort_mode')
         return {'time':now,'hour':hour,'room':(r1+r2)/2,'outside':outside,
                 'rooms':(r1,r2),
                 'room_reports':tuple(states[e].last_reported.timestamp() for e in (ROOM1, ROOM2)),
-                'heat':heat if mode_name=='Heating' else 0., 'fraction':bounded(freq/maximum,0,1),
+                'heat':heat + heater if mode_name=='Heating' else 0., 'fraction':bounded(freq/maximum,0,1),
                 'heater':heater,'mode':mode_name,'running':freq>0,'tank':tank,
                 'comfort':comfort.state if comfort else None}
 
-    def update(self, states, now, hour):
-        current = self.observation(states,now,hour)
+    def update(self, states, now, hour, *, observed_heat_kw=None):
+        current = self.observation(states,now,hour,observed_heat_kw)
         previous = self.previous
         self.previous = current
         if current is None:
@@ -421,7 +442,8 @@ class ThermalLearner:
         return {**self.quality(),'room_response':dict(self.room_response),'heat_loss_kw_per_k':loss, 'thermal_capacity_kwh_per_k':capacity,
                 'temporary_heat':self.temporary_heat.profile(self.previous['time']) if self.previous else NO_HEAT,
                 'internal_gain_kw':gain, 'heating_lag_hours':bank['lag'],
-                'initial_heat_kw':bank['heat'], 'dhw_heat_kw':self.dhw_capacity,
+                'initial_heat_kw':bank['heat'], 'active_compressor_heat_kw':self.prior['compressor_heat_kw'],
+                'dhw_heat_kw':self.dhw_capacity,
                 'dhw_fraction':self.dhw_fraction,'dhw_start_c':self.dhw_start_c,
                 'dhw_profile':self.draw[:], 'tank_max_c':min(self.prior['tank_max_c'],self.tank_ceiling),
                 'initial_run_minutes':30. if self.run_since is None else min(30.,(self.previous['time']-self.run_since)/60) if self.previous and self.previous['running'] else 0.,

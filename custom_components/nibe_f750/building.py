@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from .air_limit import FLOW, INLET, airflow
 from .engine import PRIORITY, ROOM1, ROOM2, SUPPLY, fresh, number
+from .predictive import ACTIVE_COMPRESSOR_HEAT_KW
 
 OUTLET = 'sensor.vp_extract_air_bt21'
 CONDENSER = 'sensor.vp_condenser_bt12'
@@ -23,6 +24,8 @@ IDS = (ROOM1, ROOM2, PRIORITY, SUPPLY, FLOW, INLET, OUTLET, CONDENSER,
        BT1, FREQUENCY, MAXIMUM, INLINE, DM, *STATUS)
 TEMPERATURES = (INLET, OUTLET, CONDENSER)
 HEARTBEAT = (*TEMPERATURES, FREQUENCY, DM, SUPPLY)
+SUSTAINED_COMPRESSOR_HEAT_KW = 2.0
+SUSTAINED_REFERENCE_HZ = 70.
 
 
 @dataclass(frozen=True)
@@ -143,6 +146,29 @@ def _temperature_change(night, model):
     return (night.heat_kwh - loss * night.degree_hours + gain * night.hours) / thermal_mass
 
 
+def _provisional_loss(nights, baseline):
+    """Fit only loss while heat capacity and gains remain provisional."""
+    _, mass, gain = baseline
+    cold = sorted(nights, key=lambda night: night.degree_hours / night.hours, reverse=True)
+    cold = cold[:max(3, min(7, len(cold) // 3))]
+    if len(cold) < 3:
+        return None
+
+    def fit(rows):
+        heat = sum(night.heat_kwh - mass * night.change + gain * night.hours for night in rows)
+        return heat / sum(night.degree_hours for night in rows)
+
+    fitted = fit(cold)
+    errors = [_temperature_change(night, (fit(cold[:i] + cold[i + 1:]), mass, gain)) - night.change
+              for i, night in enumerate(cold)]
+    prior_error = sum(abs(_temperature_change(night, baseline) - night.change) for night in cold)
+    # Leave each night out in turn and only prefer the refit if it improves the
+    # previous model without predicting much more recovery than observed.
+    if .01 <= fitted <= 1. and sum(map(abs, errors)) < prior_error and sum(errors) <= .3 * len(cold):
+        return fitted
+    return None
+
+
 def capacity_at(samples, outside, supply, flow, limit):
     """Lower-quartile output in comparable complete operating periods."""
     comparable = []
@@ -151,7 +177,10 @@ def capacity_at(samples, outside, supply, flow, limit):
                         + ((supply - sample['supply']) / 8.) ** 2
                         + (((flow or sample['flow']) - sample['flow']) / 35.) ** 2
                         + ((limit - sample['limit']) / 18.) ** 2)
-        if distance <= 2.:
+        if (distance <= 2. and abs(outside - sample['outside']) <= 4.
+                and abs(supply - sample['supply']) <= 10.
+                and (flow is None or abs(flow - sample['flow']) <= 30.)
+                and abs(limit - sample['limit']) <= 15.):
             comparable.append((distance, sample))
     neighbors = sorted(comparable, key=lambda pair: pair[0])[:12]
     if not neighbors:
@@ -168,6 +197,17 @@ def capacity_at(samples, outside, supply, flow, limit):
     return {'heat_kw': heat,
             'defrost_minutes_per_hour': 60 * median(s['defrost_fraction'] for _, s in neighbors),
             'periods': len(neighbors), 'nearest_distance': neighbors[0][0]}
+
+
+def planning_capacity(samples, outside, supply, flow, limit, active_kw):
+    """Use comparable cycles, with a defrost-inclusive reference for sparse data."""
+    observed = capacity_at(samples, outside, supply, flow, limit)
+    if observed and observed['periods'] >= 3 and observed['nearest_distance'] <= 1.:
+        return {**observed, 'source': 'Observed defrost cycles'}
+    provisional = active_kw * SUSTAINED_COMPRESSOR_HEAT_KW / ACTIVE_COMPRESSOR_HEAT_KW
+    return {'heat_kw': provisional * min(1., limit / SUSTAINED_REFERENCE_HZ),
+            'defrost_minutes_per_hour': None, 'periods': observed['periods'] if observed else 0,
+            'source': 'Provisional sustained output'}
 
 
 class BuildingModel:
@@ -360,6 +400,13 @@ class BuildingModel:
                   'source': 'Airflow and sensible heat plus compressor power estimate'}
         if self.recent_capacity and 0 <= now - self.recent_capacity[0] <= 7200:
             result['recent_heating_kw'] = self.recent_capacity[1]
+        h = prior['heat_loss_kw_per_k']
+        c = prior['thermal_capacity_kwh_per_k']
+        baseline = (h, c, prior.get('internal_gain_kw', 0.))
+        provisional = _provisional_loss(nights, baseline)
+        if provisional is not None:
+            result.update({'provisional_heat_loss_kw_per_k': provisional,
+                           'effective_heat_loss_kw_per_k': provisional})
         if len(nights) < 6:
             return result
         # Keep the latest two nights near the cold end of the observed range
@@ -371,9 +418,6 @@ class BuildingModel:
         result['training_lift_span_c'] = max(lifts) - min(lifts)
         if max(lifts) - min(lifts) < 3. or max(n.change / n.hours for n in train) - min(n.change / n.hours for n in train) < .06:
             return result
-        h = prior['heat_loss_kw_per_k']
-        c = prior['thermal_capacity_kwh_per_k']
-        baseline = (h, c, prior.get('internal_gain_kw', 0.))
         fitted = _fit(train, h, c)
         if fitted is None:
             return result
@@ -387,6 +431,7 @@ class BuildingModel:
                        'holdout_coldest_room_change_c': [n.coldest_change for n in verify]})
         if mae <= min(.55, baseline_mae + .05) and max(errors) <= .50 and bias <= .25:
             loss, thermal_mass, gain = fitted
+            result.pop('provisional_heat_loss_kw_per_k', None)
             result.update({'validated': True, 'heat_loss_kw_per_k': loss,
                            'effective_heat_loss_kw_per_k': loss,
                            'thermal_capacity_kwh_per_k': thermal_mass, 'internal_gain_kw': gain,

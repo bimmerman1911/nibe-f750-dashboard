@@ -12,7 +12,7 @@ from .building import BuildingModel, backfill as backfill_building, reading as b
 from .offset import OffsetLearner
 from .accounting import Accounting
 from .degree_recovery import DegreeMinuteRecovery
-from .predictive import DEFAULTS
+from .predictive import DEFAULTS, active_compressor_heat
 from .supervisor import request as adaptive_request
 from .engine import restore_dhw, calculate, fresh, number, C1, SUPPLY, REQUIRED, PRIORITY, ROOM1, ROOM2, TELEMETRY
 from .inline import (Approval, CAP_ENTITY, EVENT, MIN_LEAD, START_GRACE,
@@ -52,7 +52,12 @@ class Controller:
         self.prediction_log = []
         self.last_prediction = None
         self.decision_log = []
-        self.learner = ThermalLearner(getattr(predictor,'options',None))
+        options = getattr(predictor, 'options', {})
+        # The native offset response uses its existing nominal units. The
+        # room learner takes estimated space heat in physical kW.
+        self.native_heat_kw = options.get('compressor_heat_kw', DEFAULTS['compressor_heat_kw'])
+        self.thermal_options = {**options, 'compressor_heat_kw': active_compressor_heat(options)}
+        self.learner = ThermalLearner(self.thermal_options)
         self.building = BuildingModel(str(self.accounting.zone))
         self.saved_learning_revision = 0
         self.offset_learner = OffsetLearner()
@@ -74,7 +79,7 @@ class Controller:
         self.accounting.restore(await self.accounting_store.async_load())
         self.offset_learner.restore(await self.offset_store.async_load())
         learning = await self.learning_store.async_load()
-        if learning and not self.learner.restore(learning):
+        if learning and not self.learner.restore(learning, self.native_heat_kw):
             _LOGGER.warning('Invalid adaptive model data; restarting learning from initial parameters')
         self.building.restore((learning or {}).get('building'))
         if self.predictor:
@@ -200,7 +205,7 @@ class Controller:
 
     async def async_reset_learning(self):
         async with self.lock:
-            self.learner = ThermalLearner(getattr(self.predictor,'options',None))
+            self.learner = ThermalLearner(self.thermal_options)
             self.building = BuildingModel(str(self.accounting.zone))
             self.building.history_checked = True
             await self.learning_store.async_save({**self.learner.dump(), 'building': self.building.dump()})
@@ -270,17 +275,19 @@ class Controller:
             self.last_sample = now
         try:
             temporary_before = self.learner.temporary_heat.active
-            self.learner.update(states,now,dt_util.now().hour)
-            building_revision = self.building.revision
             saved_flow = self.offset_learner.air_limit.last_airflow
             recent_flow = saved_flow['flow'] if saved_flow and 0 <= now - saved_flow['time'] <= 7200 else None
-            self.building.observe(building_reading(states, now, recent_flow), self.learner.temporary_heat.learning_hold)
+            measured_heat = building_reading(states, now, recent_flow)
+            self.learner.update(states, now, dt_util.now().hour,
+                                observed_heat_kw=measured_heat.heat if measured_heat else None)
+            building_revision = self.building.revision
+            self.building.observe(measured_heat, self.learner.temporary_heat.learning_hold)
             if self.predictor and self.building.revision != building_revision:
                 self.predictor.last_refresh = None
             if self.predictor and temporary_before != self.learner.temporary_heat.active:
                 self.predictor.last_refresh = None
             revision=self.offset_learner.revision
-            self.offset_learner.update(states,now,self.learner.prior['compressor_heat_kw'],
+            self.offset_learner.update(states,now,self.native_heat_kw,
                                        learn_emitter=not self.learner.temporary_heat.learning_hold)
             if revision!=self.offset_learner.revision:
                 await self.offset_store.async_save(self.offset_learner.dump())
@@ -371,7 +378,7 @@ class Controller:
             recovery_offset = self.degree_recovery.offset(states, now, bounds['room_max_c'], number(response.get('offset_gain')))
             result = calculate(states, now, dt_util.now().hour,
                 self.short_since is not None and now-self.short_since >= 900, control=chosen,options=options,
-                response=response, compressor_heat_kw=self.learner.prior['compressor_heat_kw'],
+                response=response, compressor_heat_kw=self.native_heat_kw,
                 recovery_offset=recovery_offset, temporary_heat=self.learner.temporary_heat.profile(now))
             if result is None:
                 result = {'targets':[], 'writes':restore_dhw(states)}

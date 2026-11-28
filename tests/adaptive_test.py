@@ -21,6 +21,27 @@ def states_at(t,room=20.,outdoor=5.,q=2.1,tank=49.,mode='Heating'):
              last_reported=datetime.fromtimestamp(t,timezone.utc)) for e,v in values.items()}
 
 class LearningTests(unittest.TestCase):
+    def test_legacy_room_fit_moves_to_new_reference_without_losing_history(self):
+        old = adaptive.ThermalLearner()
+        old.banks[old.selected]['heat'] = 3.5
+        old.room_response['heating_kw'] = 3.5
+        old.draw_counts[6] = 12
+        saved = copy.deepcopy(old.dump())
+        del saved['compressor_heat_kw']
+        learner = adaptive.ThermalLearner({'compressor_heat_kw': 2.4})
+        self.assertTrue(learner.restore(saved))
+        before, after = old.parameters(), learner.parameters()
+        scale = 2.4 / 4.2
+        for key in ('heat_loss_kw_per_k', 'thermal_capacity_kwh_per_k', 'initial_heat_kw'):
+            self.assertAlmostEqual(after[key], before[key] * scale)
+        self.assertEqual(learner.draw_counts[6], 12)
+        restarted = adaptive.ThermalLearner({'compressor_heat_kw': 2.4})
+        self.assertTrue(restarted.restore(learner.dump()))
+        self.assertEqual(restarted.parameters(), after)
+        snapshot = states_at(BASE, q=4.2)
+        self.assertEqual(learner.observation(snapshot, BASE, 12)['heat'], 2.4)
+        self.assertEqual(learner.observation(snapshot, BASE, 12, observed_heat_kw=2.15)['heat'], 2.15)
+
     def test_identification_improves_observed_response_and_survives_restart(self):
         learner=adaptive.ThermalLearner()
         room=20.

@@ -28,7 +28,7 @@
           "weather_entity": "Hourly weather entity",
           "heat_loss_kw_per_k": "Building heat loss (kW/K)",
           "thermal_capacity_kwh_per_k": "Building thermal storage (kWh/K)",
-          "compressor_heat_kw": "Compressor heating capacity (kW)",
+          "active_compressor_heat_kw": "Provisional compressor heat while running (kW)",
           "compressor_max_supply_diff_c": "Compressor stop temperature difference (°C)",
           "dhw_heat_kw": "DHW heating capacity (kW)",
           "room_min_c": "Minimum room temperature (\u00b0C)",
