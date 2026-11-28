@@ -23,6 +23,21 @@ class BuildingTests(unittest.TestCase):
         self.assertEqual(observed['heat_kw'], 1.65)
         self.assertEqual(observed['source'], 'Observed defrost cycles')
 
+    def test_single_long_defrost_cannot_displace_the_provisional_output(self):
+        typical = {'heat_kw': 2.08, 'outside': -7.9, 'supply': 28.6,
+                   'flow': 147.2, 'limit': 72.8, 'defrost_fraction': .15}
+        long_defrost = {**typical, 'outside': -9.4, 'supply': 26.,
+                        'heat_kw': 1.03, 'defrost_fraction': .58}
+        conditions = (-5.92, 25.88, 147.2, 66.48, 2.4)
+        typical_again = {**typical, 'heat_kw': 2.11, 'outside': -8.2}
+        estimate = building.planning_capacity([typical, typical_again, long_defrost], *conditions)
+        self.assertEqual(estimate['source'], 'Provisional sustained output')
+        self.assertAlmostEqual(estimate['heat_kw'], 2 * 66.48 / 70)
+        self.assertEqual(estimate['periods'], 2)
+        recurring = building.planning_capacity([long_defrost] * 3, *conditions)
+        self.assertEqual(recurring['source'], 'Observed defrost cycles')
+        self.assertLess(recurring['heat_kw'], 1.1)
+
     def test_provisional_fit_uses_delivered_heat_and_actual_cooling(self):
         model = building.BuildingModel('Europe/Stockholm')
         prior = {'heat_loss_kw_per_k': .1, 'thermal_capacity_kwh_per_k': 9.,

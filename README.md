@@ -27,6 +27,8 @@ The integration registers its bundled cards automatically. For YAML-mode dashboa
 
 Smart Control uses 2.4 kW as the default estimate at full speed during active space heating. The room learner uses the airflow and temperature estimate when available. The planner uses a provisional 2.0 kW sustained space-heating estimate at 70 Hz, reduced if the compressor is limited below that speed. Closely matched observed defrost cycles take precedence. Hot-water charging is simulated separately.
 
+Since v0.34.5, the planner estimates typical output from the weighted median of closely matched cycles. Unusually long defrosts can influence the estimate once at least three comparable cycles show that pattern. When evidence is sparse, it uses the provisional output.
+
 On upgrade, the room model converts its existing fit to the new compressor reference and keeps learning from local measurements. Recent cold nights can provide a provisional heat-loss coefficient if a refit better predicts their cooling in leave-one-out checks. A validated overnight fit takes precedence.
 
 ## Local outdoor forecast — v0.34.1

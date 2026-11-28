@@ -170,26 +170,28 @@ def _provisional_loss(nights, baseline):
 
 
 def capacity_at(samples, outside, supply, flow, limit):
-    """Lower-quartile output in comparable complete operating periods."""
+    """Estimate typical sustained output from closely matched operating periods."""
     comparable = []
     for sample in samples:
         distance = sqrt(((outside - sample['outside']) / 5.) ** 2
                         + ((supply - sample['supply']) / 8.) ** 2
                         + (((flow or sample['flow']) - sample['flow']) / 35.) ** 2
                         + ((limit - sample['limit']) / 18.) ** 2)
-        if (distance <= 2. and abs(outside - sample['outside']) <= 4.
-                and abs(supply - sample['supply']) <= 10.
-                and (flow is None or abs(flow - sample['flow']) <= 30.)
-                and abs(limit - sample['limit']) <= 15.):
+        if distance <= 1. and abs(outside - sample['outside']) <= 4.:
             comparable.append((distance, sample))
     neighbors = sorted(comparable, key=lambda pair: pair[0])[:12]
     if not neighbors:
         return None
-    closest = neighbors[0][0]
-    neighbors = [(distance, sample) for distance, sample in neighbors if distance <= closest + .75]
+    # Keep unusual long defrosts in history. Require repeat evidence before
+    # allowing that behavior to define the normal output at this operating point.
+    ordinary = [(distance, sample) for distance, sample in neighbors if sample['defrost_fraction'] <= .4]
+    if len(neighbors) - len(ordinary) < 3:
+        neighbors = ordinary
+    if not neighbors:
+        return None
     weighted = sorted((s['heat_kw'] * min(1., limit / s['limit']), exp(-2 * distance**2))
                       for distance, s in neighbors)
-    cutoff = sum(weight for _, weight in weighted) / 4
+    cutoff = sum(weight for _, weight in weighted) / 2
     for heat, weight in weighted:
         cutoff -= weight
         if cutoff <= 0:
@@ -202,7 +204,7 @@ def capacity_at(samples, outside, supply, flow, limit):
 def planning_capacity(samples, outside, supply, flow, limit, active_kw):
     """Use comparable cycles, with a defrost-inclusive reference for sparse data."""
     observed = capacity_at(samples, outside, supply, flow, limit)
-    if observed and observed['periods'] >= 3 and observed['nearest_distance'] <= 1.:
+    if observed and observed['periods'] >= 3:
         return {**observed, 'source': 'Observed defrost cycles'}
     provisional = active_kw * SUSTAINED_COMPRESSOR_HEAT_KW / ACTIVE_COMPRESSOR_HEAT_KW
     return {'heat_kw': provisional * min(1., limit / SUSTAINED_REFERENCE_HZ),
